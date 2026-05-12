@@ -2,6 +2,7 @@
     "use strict";
 
     var config = window.LocalAiConfig;
+    var markdown = window.LocalAiMarkdown;
     var CHAT_KEY = config.STORAGE_KEYS.chats;
     var SETTINGS_KEY = config.STORAGE_KEYS.settings;
     var API_KEY = config.STORAGE_KEYS.apiKey;
@@ -14,11 +15,11 @@
         activeChatId: "",
         settings: loadSettings(),
         pendingImages: [],
+        modelOptions: [],
         endpointWasAutoFilled: false,
         abortController: null,
         isSending: false,
         isLoadingModels: false,
-        isTesting: false,
         status: null
     };
 
@@ -34,10 +35,11 @@
             openaiApiSelect: document.getElementById("openaiApiSelect"),
             endpointInput: document.getElementById("endpointInput"),
             requestPreview: document.getElementById("requestPreview"),
+            modelPicker: document.getElementById("modelPicker"),
             modelInput: document.getElementById("modelInput"),
-            modelOptions: document.getElementById("modelOptions"),
+            modelMenuButton: document.getElementById("modelMenuButton"),
+            modelMenu: document.getElementById("modelMenu"),
             loadModelsButton: document.getElementById("loadModelsButton"),
-            testButton: document.getElementById("testButton"),
             connectionFeedback: document.getElementById("connectionFeedback"),
             apiKeyInput: document.getElementById("apiKeyInput"),
             systemPromptInput: document.getElementById("systemPromptInput"),
@@ -144,6 +146,27 @@
             input.addEventListener("input", syncSettingsFromForm);
         });
 
+        elements.modelMenuButton.addEventListener("click", function() {
+            toggleModelMenu(elements.modelMenu.hidden);
+        });
+
+        document.addEventListener("click", function(event) {
+            if (!elements.modelPicker.contains(event.target)) {
+                toggleModelMenu(false);
+            }
+        });
+
+        elements.modelInput.addEventListener("keydown", function(event) {
+            if (event.key === "ArrowDown" && state.modelOptions.length) {
+                event.preventDefault();
+                toggleModelMenu(true);
+                focusFirstModelOption();
+            }
+            if (event.key === "Escape") {
+                toggleModelMenu(false);
+            }
+        });
+
         elements.reasoningSelect.addEventListener("change", syncSettingsFromForm);
 
         elements.endpointInput.addEventListener("blur", normalizeEndpointInput);
@@ -170,13 +193,18 @@
             });
         });
 
+        elements.promptInput.addEventListener("paste", function(event) {
+            handlePromptPaste(event).catch(function(error) {
+                setFeedback(explainError(error), "error");
+            });
+        });
+
         elements.loadModelsButton.addEventListener("click", function() {
             loadModels(true).catch(function(error) {
                 setStatus(explainError(error), "error");
             });
         });
 
-        elements.testButton.addEventListener("click", testConnection);
         elements.exportButton.addEventListener("click", exportChats);
         elements.clearButton.addEventListener("click", clearAllChats);
         elements.stopButton.addEventListener("click", stopGeneration);
@@ -385,7 +413,7 @@
 
             var body = document.createElement("div");
             body.className = "message-body";
-            body.textContent = message.content || (message.role === "assistant" ? "..." : "");
+            renderMessageBody(body, message);
             if (Array.isArray(message.images) && message.images.length) {
                 body.appendChild(renderMessageImages(message.images));
             }
@@ -396,6 +424,15 @@
         });
 
         elements.messages.scrollTop = elements.messages.scrollHeight;
+    }
+
+    function renderMessageBody(container, message) {
+        var content = message.content || (message.role === "assistant" ? "..." : "");
+        if (message.role === "assistant" && !message.error) {
+            markdown.renderAssistant(container, message.reasoning || "", content);
+            return;
+        }
+        container.textContent = content;
     }
 
     function renderMessageImages(images) {
@@ -462,24 +499,38 @@
     function updateProviderControls() {
         var isOpenAi = state.settings.provider === "openai";
         elements.openaiApiField.hidden = !isOpenAi;
+        elements.openaiApiField.setAttribute("aria-hidden", isOpenAi ? "false" : "true");
+        elements.openaiApiSelect.disabled = !isOpenAi || state.isSending;
         elements.openaiApiSelect.value = state.settings.openaiApi;
         elements.endpointInput.placeholder = config.addressPlaceholderFor(state.settings.provider);
     }
 
     function updateRequestPreview() {
-        var modelsUrl = config.requestUrlFor(state.settings, "models");
         var chatUrl = config.requestUrlFor(state.settings, "chat");
-        var address = config.normalizeAddress(state.settings.endpoint, state.settings.provider);
-        var host = config.hostLabelFor(state.settings.endpoint, state.settings.provider);
-        var addressText = address || "待填写地址";
-        var hostText = host || "待填写地址";
-        var modelsText = modelsUrl || "待填写地址";
         var chatText = chatUrl || "待填写地址";
         elements.requestPreview.innerHTML = "";
-        elements.requestPreview.appendChild(previewLine("地址: " + addressText));
-        elements.requestPreview.appendChild(previewLine("主机: " + hostText));
-        elements.requestPreview.appendChild(previewLine("模型 GET: " + modelsText));
         elements.requestPreview.appendChild(previewLine("对话 POST: " + chatText));
+    }
+
+    function toggleModelMenu(open) {
+        var shouldOpen = Boolean(open && state.modelOptions.length && !state.isSending);
+        elements.modelMenu.hidden = !shouldOpen;
+        elements.modelMenuButton.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+    }
+
+    function focusFirstModelOption() {
+        var option = elements.modelMenu.querySelector(".model-option");
+        if (option) {
+            option.focus();
+        }
+    }
+
+    function selectModel(model) {
+        elements.modelInput.value = model;
+        syncSettingsFromForm();
+        renderModelOptions(state.modelOptions);
+        toggleModelMenu(false);
+        elements.modelInput.focus();
     }
 
     function previewLine(text) {
@@ -494,9 +545,10 @@
         elements.stopButton.disabled = !state.isSending;
         elements.promptInput.disabled = state.isSending;
         elements.providerSelect.disabled = state.isSending;
-        elements.openaiApiSelect.disabled = state.isSending;
+        elements.openaiApiSelect.disabled = state.isSending || state.settings.provider !== "openai";
         elements.endpointInput.disabled = state.isSending;
         elements.modelInput.disabled = state.isSending;
+        elements.modelMenuButton.disabled = state.isSending || !state.modelOptions.length;
         elements.systemPromptInput.disabled = state.isSending;
         elements.temperatureInput.disabled = state.isSending;
         elements.maxTokensInput.disabled = state.isSending;
@@ -505,7 +557,9 @@
         elements.apiKeyInput.disabled = state.isSending;
         elements.attachButton.disabled = state.isSending;
         elements.loadModelsButton.disabled = state.isSending || state.isLoadingModels;
-        elements.testButton.disabled = state.isSending || state.isTesting;
+        if (state.isSending) {
+            toggleModelMenu(false);
+        }
     }
 
     async function sendPrompt(event) {
@@ -598,7 +652,7 @@
     function buildMessages(chat) {
         var messages = chat.messages
             .filter(function(message) {
-                return !message.error && (message.content.trim() || (Array.isArray(message.images) && message.images.length));
+                return !message.error && hasMessageContent(message);
             })
             .map(function(message) {
                 return {
@@ -636,9 +690,15 @@
 
         if (state.settings.stream && response.body && isEventStream(response)) {
             await readSse(response, function(json) {
-                var delta = json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content;
-                if (delta) {
-                    assistantMessage.content += delta;
+                var choice = json.choices && json.choices[0];
+                var delta = (choice && choice.delta) || {};
+                var reasoningDelta = markdown.reasoningTextFromObject(delta);
+                if (reasoningDelta) {
+                    assistantMessage.reasoning = (assistantMessage.reasoning || "") + reasoningDelta;
+                    scheduleMessageRender();
+                }
+                if (typeof delta.content === "string") {
+                    assistantMessage.content += delta.content;
                     scheduleMessageRender();
                 }
             });
@@ -646,7 +706,9 @@
         }
 
         var data = await response.json();
-        assistantMessage.content = (((data.choices || [])[0] || {}).message || {}).content || "";
+        var message = (((data.choices || [])[0] || {}).message || {});
+        assistantMessage.reasoning = markdown.reasoningTextFromObject(message);
+        assistantMessage.content = openAiMessageContent(message);
     }
 
     async function requestOpenAiResponses(messages, assistantMessage) {
@@ -679,8 +741,18 @@
                     scheduleMessageRender();
                     return;
                 }
-                if (json.type === "response.completed" && json.response && !assistantMessage.content.trim()) {
-                    assistantMessage.content = extractOpenAiResponseText(json.response);
+                if (json.type === "response.reasoning_text.delta" && typeof json.delta === "string") {
+                    assistantMessage.reasoning = (assistantMessage.reasoning || "") + json.delta;
+                    scheduleMessageRender();
+                    return;
+                }
+                if (json.type === "response.completed" && json.response) {
+                    if (!String(assistantMessage.reasoning || "").trim()) {
+                        assistantMessage.reasoning = extractOpenAiResponseReasoning(json.response);
+                    }
+                    if (!assistantMessage.content.trim()) {
+                        assistantMessage.content = extractOpenAiResponseText(json.response);
+                    }
                 }
                 if (json.type === "error" && json.error) {
                     throw new Error(json.error.message || "OpenAI Responses stream error");
@@ -690,12 +762,13 @@
         }
 
         var data = await response.json();
+        assistantMessage.reasoning = extractOpenAiResponseReasoning(data);
         assistantMessage.content = extractOpenAiResponseText(data);
     }
 
     async function requestLmStudioRest(chat, assistantMessage) {
         var latestUserMessage = chat.messages.slice().reverse().find(function(message) {
-            return message.role === "user" && message.content.trim();
+            return message.role === "user" && hasMessageContent(message);
         });
         var body = {
             model: state.settings.model,
@@ -725,6 +798,11 @@
 
         if (state.settings.stream && response.body && isEventStream(response)) {
             await readSse(response, function(json) {
+                if (json.type === "reasoning.delta" && typeof json.content === "string") {
+                    assistantMessage.reasoning = (assistantMessage.reasoning || "") + json.content;
+                    scheduleMessageRender();
+                    return;
+                }
                 if (json.type === "message.delta" && typeof json.content === "string") {
                     assistantMessage.content += json.content;
                     scheduleMessageRender();
@@ -732,6 +810,9 @@
                 }
                 if (json.type === "chat.end" && json.result) {
                     chat.lmStudioResponseId = json.result.response_id || chat.lmStudioResponseId;
+                    if (!String(assistantMessage.reasoning || "").trim()) {
+                        assistantMessage.reasoning = extractLmStudioRestReasoning(json.result);
+                    }
                     if (!assistantMessage.content.trim()) {
                         assistantMessage.content = extractLmStudioRestText(json.result);
                     }
@@ -745,6 +826,7 @@
 
         var data = await response.json();
         chat.lmStudioResponseId = data.response_id || chat.lmStudioResponseId;
+        assistantMessage.reasoning = extractLmStudioRestReasoning(data);
         assistantMessage.content = extractLmStudioRestText(data);
     }
 
@@ -821,6 +903,12 @@
                     scheduleMessageRender();
                     return;
                 }
+                var reasoningDelta = markdown.reasoningTextFromObject(json.delta || json);
+                if (reasoningDelta) {
+                    assistantMessage.reasoning = (assistantMessage.reasoning || "") + reasoningDelta;
+                    scheduleMessageRender();
+                    return;
+                }
                 if (json.type === "message_stop" || json.type === "message.end") {
                     return;
                 }
@@ -832,7 +920,18 @@
         }
 
         var data = await response.json();
+        assistantMessage.reasoning = extractAnthropicReasoning(data);
         assistantMessage.content = extractAnthropicText(data);
+    }
+
+    function hasMessageContent(message) {
+        return Boolean(
+            message &&
+            (
+                String(message.content || "").trim() ||
+                (Array.isArray(message.images) && message.images.length)
+            )
+        );
     }
 
     function toOpenAiChatMessage(message) {
@@ -888,12 +987,10 @@
             return message.content;
         }
         var input = [];
-        if (message.content) {
-            input.push({
-                type: "text",
-                content: message.content
-            });
-        }
+        input.push({
+            type: "message",
+            content: message.content || " "
+        });
         message.images.forEach(function(image) {
             input.push({
                 type: "image",
@@ -1038,6 +1135,18 @@
         }).join("").trim();
     }
 
+    function extractLmStudioRestReasoning(data) {
+        if (!data || !Array.isArray(data.output)) {
+            return "";
+        }
+        return data.output.map(function(item) {
+            if (!item || item.type !== "reasoning") {
+                return "";
+            }
+            return item.content || "";
+        }).join("").trim();
+    }
+
     function extractAnthropicText(data) {
         if (!data) {
             return "";
@@ -1050,6 +1159,15 @@
         }
         return data.content.map(function(item) {
             return item && item.type === "text" ? item.text || "" : "";
+        }).join("").trim();
+    }
+
+    function extractAnthropicReasoning(data) {
+        if (!data || !Array.isArray(data.content)) {
+            return "";
+        }
+        return data.content.map(function(item) {
+            return markdown.reasoningTextFromObject(item);
         }).join("").trim();
     }
 
@@ -1079,6 +1197,42 @@
                 }
                 return "";
             }).join("");
+        }).join("").trim();
+    }
+
+    function extractOpenAiResponseReasoning(data) {
+        if (!data || !Array.isArray(data.output)) {
+            return "";
+        }
+        return data.output.map(function(item) {
+            return markdown.reasoningTextFromObject(item);
+        }).join("").trim();
+    }
+
+    function openAiMessageContent(message) {
+        if (!message) {
+            return "";
+        }
+        if (typeof message.content === "string") {
+            return message.content;
+        }
+        if (!Array.isArray(message.content)) {
+            return "";
+        }
+        return message.content.map(function(part) {
+            if (!part) {
+                return "";
+            }
+            if (typeof part === "string") {
+                return part;
+            }
+            if (typeof part.text === "string") {
+                return part.text;
+            }
+            if (typeof part.content === "string") {
+                return part.content;
+            }
+            return "";
         }).join("").trim();
     }
 
@@ -1165,7 +1319,7 @@
         }
         try {
             if (showStatus) {
-                setStatus("正在读取模型", "ok");
+                setStatus("正在刷新模型", "ok");
             }
             setFeedback("正在请求 " + modelEndpoint.url, "ok");
             var response = await fetch(modelEndpoint.url, {
@@ -1181,8 +1335,8 @@
                 saveSettings();
                 updateProviderLabels();
             }
-            setStatus(models.length ? "模型读取完成" : "连接成功，无模型列表", models.length ? "ok" : "warn");
-            setFeedback(models.length ? "已读取 " + models.length + " 个模型。" : "接口可访问，但响应里没有模型列表。", models.length ? "ok" : "warn");
+            setStatus(models.length ? "连接正常，已刷新模型列表" : "连接正常，但未返回模型列表", models.length ? "ok" : "warn");
+            setFeedback(models.length ? "连接正常，已刷新模型列表。" : "连接正常，但未返回模型列表。", models.length ? "ok" : "warn");
             return models;
         } catch (error) {
             setStatus("模型读取失败", "error");
@@ -1286,33 +1440,47 @@
         return Boolean(value) && value.toLowerCase().indexOf("embedding") === -1 && value.toLowerCase().indexOf("embed") === -1;
     }
 
-    async function testConnection() {
-        state.isTesting = true;
-        setButtonLoading(elements.testButton, true, "测试中", "测试连接");
-        updateSendState();
-        try {
-            setStatus("正在测试连接", "ok");
-            var models = await loadModels(false);
-            setStatus("连接可用", "ok");
-            setFeedback(models.length ? "连接可用，已读取 " + models.length + " 个模型。" : "连接可用，但没有模型列表。", models.length ? "ok" : "warn");
-        } catch (error) {
-            setStatus(explainError(error), "error");
-            setFeedback(explainError(error), "error");
-        } finally {
-            state.isTesting = false;
-            setButtonLoading(elements.testButton, false, "测试中", "测试连接");
-            updateSendState();
+    function renderModelOptions(models) {
+        state.modelOptions = models.slice();
+        elements.modelMenu.textContent = "";
+        models.forEach(function(model) {
+            var option = document.createElement("button");
+            option.type = "button";
+            option.className = "model-option" + (model === state.settings.model ? " is-selected" : "");
+            option.textContent = model;
+            option.addEventListener("click", function() {
+                selectModel(model);
+            });
+            option.addEventListener("keydown", function(event) {
+                var current = state.modelOptions.indexOf(model);
+                if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    focusModelOption(current + 1);
+                } else if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    focusModelOption(current - 1);
+                } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    toggleModelMenu(false);
+                    elements.modelInput.focus();
+                }
+            });
+            elements.modelMenu.appendChild(option);
+        });
+        elements.modelInput.placeholder = models.length ? "选择或输入模型名" : "手动输入模型名";
+        elements.modelMenuButton.disabled = state.isSending || !models.length;
+        if (!models.length) {
+            toggleModelMenu(false);
         }
     }
 
-    function renderModelOptions(models) {
-        elements.modelOptions.textContent = "";
-        models.forEach(function(model) {
-            var option = document.createElement("option");
-            option.value = model;
-            elements.modelOptions.appendChild(option);
-        });
-        elements.modelInput.placeholder = models.length ? "选择或输入模型名" : "手动输入模型名";
+    function focusModelOption(index) {
+        var options = elements.modelMenu.querySelectorAll(".model-option");
+        if (!options.length) {
+            return;
+        }
+        var next = (index + options.length) % options.length;
+        options[next].focus();
     }
 
     function stopGeneration() {
@@ -1391,6 +1559,23 @@
         setFeedback("已添加 " + loaded.length + " 张图片。", "ok");
     }
 
+    async function handlePromptPaste(event) {
+        var items = Array.from((event.clipboardData && event.clipboardData.items) || []);
+        var files = items
+            .filter(function(item) {
+                return item.kind === "file" && item.type.indexOf("image/") === 0;
+            })
+            .map(function(item) {
+                return item.getAsFile();
+            })
+            .filter(Boolean);
+        if (!files.length) {
+            return;
+        }
+        event.preventDefault();
+        await addImageFiles(files);
+    }
+
     function readImageFile(file) {
         return new Promise(function(resolve, reject) {
             var reader = new FileReader();
@@ -1413,6 +1598,7 @@
         return {
             role: role,
             content: content,
+            reasoning: "",
             images: images || [],
             createdAt: new Date().toISOString()
         };

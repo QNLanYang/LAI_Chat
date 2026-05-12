@@ -208,19 +208,6 @@
         return provider.mode === "anthropic" ? "api.anthropic.com" : "api.example.com";
     }
 
-    function hostLabelFor(value, providerKey) {
-        var address = normalizeAddress(value, providerKey);
-        if (!address) {
-            return "";
-        }
-        try {
-            var url = new URL(address);
-            return url.host + " (" + url.protocol.replace(":", "") + ")";
-        } catch (error) {
-            return address;
-        }
-    }
-
     window.LocalAiConfig = {
         STORAGE_KEYS: STORAGE_KEYS,
         PROVIDERS: PROVIDERS,
@@ -231,7 +218,6 @@
         requestPathFor: requestPathFor,
         requestUrlFor: requestUrlFor,
         isDefaultAddress: isDefaultAddress,
-        addressPlaceholderFor: addressPlaceholderFor,
-        hostLabelFor: hostLabelFor
+        addressPlaceholderFor: addressPlaceholderFor
     };
 })(window);

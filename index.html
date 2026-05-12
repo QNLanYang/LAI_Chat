@@ -9,6 +9,9 @@
     <meta name="description" content="本地优先的静态 AI 聊天客户端">
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="styles.css">
+    <script src="vendor/purify.min.js" defer></script>
+    <script src="vendor/marked.min.js" defer></script>
+    <script src="markdown.js" defer></script>
     <script src="providers.js" defer></script>
     <script src="app.js" defer></script>
 </head>
@@ -56,12 +59,14 @@
                 <div class="request-preview" id="requestPreview" aria-live="polite"></div>
                 <label>
                     <span>模型</span>
-                    <input id="modelInput" list="modelOptions" spellcheck="false" autocomplete="off" placeholder="选择或输入模型名">
-                    <datalist id="modelOptions"></datalist>
+                    <div class="model-picker" id="modelPicker">
+                        <input id="modelInput" spellcheck="false" autocomplete="off" placeholder="选择或输入模型名">
+                        <button class="model-menu-button" type="button" id="modelMenuButton" aria-label="展开模型列表" aria-expanded="false">▾</button>
+                        <div class="model-menu" id="modelMenu" hidden></div>
+                    </div>
                 </label>
                 <div class="row-actions">
-                    <button class="ghost-button" type="button" id="loadModelsButton">读取模型</button>
-                    <button class="ghost-button" type="button" id="testButton">测试连接</button>
+                    <button class="ghost-button" type="button" id="loadModelsButton">刷新模型</button>
                 </div>
                 <div class="connection-feedback" id="connectionFeedback" aria-live="polite"></div>
                 <label>
