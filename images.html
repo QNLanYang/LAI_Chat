@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>AI Images</title>
+    <meta name="description" content="本地优先的静态 AI 图片生成客户端">
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="styles.css">
+    <script src="providers.js" defer></script>
+    <script src="presets.js" defer></script>
+    <script src="images.js" defer></script>
+</head>
+
+<body>
+    <div class="image-shell">
+        <aside class="sidebar" aria-label="图片生成设置">
+            <header class="brand">
+                <div>
+                    <h1>AI Images</h1>
+                    <p id="imageStatusText">未连接</p>
+                </div>
+            </header>
+
+            <nav class="app-nav" aria-label="应用导航">
+                <a href="index.html">聊天</a>
+                <a class="is-active" href="images.html">图片</a>
+                <a href="settings.html">设置</a>
+            </nav>
+
+            <section class="side-section settings">
+                <h2>连接</h2>
+                <label>
+                    <span>预设</span>
+                    <select id="imagePresetSelect"></select>
+                </label>
+                <label>
+                    <span>Provider</span>
+                    <select id="imageProviderSelect"></select>
+                </label>
+                <label>
+                    <span>地址</span>
+                    <input id="imageEndpointInput" type="text" inputmode="url" spellcheck="false" autocomplete="off">
+                </label>
+                <label>
+                    <span>模型</span>
+                    <input id="imageModelInput" spellcheck="false" autocomplete="off">
+                </label>
+                <label>
+                    <span>API Key（保存在当前预设）</span>
+                    <input id="imageApiKeyInput" type="password" spellcheck="false" autocomplete="new-password">
+                </label>
+                <div class="request-preview" id="imageRequestPreview" aria-live="polite"></div>
+            </section>
+
+            <section class="side-section settings">
+                <h2>参数</h2>
+                <label>
+                    <span>尺寸</span>
+                    <select id="imageSizeSelect">
+                        <option value="1024x1024">1024 x 1024</option>
+                        <option value="1536x1024">1536 x 1024</option>
+                        <option value="1024x1536">1024 x 1536</option>
+                        <option value="auto">auto</option>
+                    </select>
+                </label>
+                <label>
+                    <span>数量</span>
+                    <input id="imageCountInput" type="number" min="1" max="4" step="1" value="1">
+                </label>
+            </section>
+        </aside>
+
+        <main class="image-panel" aria-label="图片生成">
+            <header class="chat-header">
+                <div>
+                    <p class="eyebrow" id="imageProviderLabel">OpenAI Images</p>
+                    <h2>图片生成</h2>
+                </div>
+                <div class="status-pill" id="imageStatusPill">Local first</div>
+            </header>
+
+            <section class="image-workbench">
+                <form class="image-composer" id="imageForm">
+                    <label>
+                        <span>提示词</span>
+                        <textarea id="imagePromptInput" rows="5" placeholder="描述要生成或编辑的图片..."></textarea>
+                    </label>
+                    <div class="attachment-strip" id="imageAttachmentStrip" hidden></div>
+                    <div class="composer-actions">
+                        <input id="imageReferenceInput" type="file" accept="image/*" multiple hidden>
+                        <button class="ghost-button" type="button" id="imageAttachButton">参考图</button>
+                        <button class="ghost-button" type="button" id="imageClearButton">清空</button>
+                        <button class="send-button" type="submit" id="imageGenerateButton">生成</button>
+                    </div>
+                    <div class="connection-feedback" id="imageFeedback" aria-live="polite"></div>
+                </form>
+
+                <section class="image-results" id="imageResults" aria-live="polite"></section>
+            </section>
+        </main>
+    </div>
+</body>
+
+</html>

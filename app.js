@@ -3,6 +3,7 @@
 
     var config = window.LocalAiConfig;
     var markdown = window.LocalAiMarkdown;
+    var presetsApi = window.LocalAiPresets;
     var CHAT_KEY = config.STORAGE_KEYS.chats;
     var SETTINGS_KEY = config.STORAGE_KEYS.settings;
     var API_KEY = config.STORAGE_KEYS.apiKey;
@@ -20,6 +21,8 @@
         abortController: null,
         isSending: false,
         isLoadingModels: false,
+        chatPresets: [],
+        activeChatPreset: null,
         status: null
     };
 
@@ -30,6 +33,7 @@
             statusText: document.getElementById("statusText"),
             chatList: document.getElementById("chatList"),
             newChatButton: document.getElementById("newChatButton"),
+            chatPresetSelect: document.getElementById("chatPresetSelect"),
             providerSelect: document.getElementById("providerSelect"),
             openaiApiField: document.getElementById("openaiApiField"),
             openaiApiSelect: document.getElementById("openaiApiSelect"),
@@ -62,6 +66,9 @@
             sendButton: document.getElementById("sendButton")
         };
 
+        state.chatPresets = presetsApi.presetsByKind("chat");
+        state.activeChatPreset = presetsApi.getActivePreset("chat");
+        state.settings = presetsApi.applyChatPreset(state.settings, state.activeChatPreset);
         state.chats = loadChats();
         if (!state.chats.length) {
             createChat(false);
@@ -78,6 +85,7 @@
         elements.maxTokensInput.value = state.settings.maxTokens;
         elements.reasoningSelect.value = state.settings.reasoning;
         elements.streamCheckbox.checked = state.settings.stream;
+        renderChatPresetSelect();
         elements.apiKeyInput.value = loadApiKey();
         state.endpointWasAutoFilled = config.isDefaultAddress(state.settings.provider, state.settings.endpoint);
 
@@ -92,6 +100,24 @@
     function bindEvents() {
         elements.newChatButton.addEventListener("click", function() {
             createChat(true);
+        });
+
+        elements.chatPresetSelect.addEventListener("change", function() {
+            var presetId = elements.chatPresetSelect.value;
+            presetsApi.setActivePreset("chat", presetId);
+            state.activeChatPreset = state.chatPresets.find(function(preset) {
+                return preset.id === presetId;
+            }) || presetsApi.getActivePreset("chat");
+            state.settings = presetsApi.applyChatPreset(state.settings, state.activeChatPreset);
+            applySettingsToForm();
+            renderModelOptions([]);
+            clearFeedback();
+            state.status = null;
+            saveSettings();
+            updateProviderControls();
+            updateRequestPreview();
+            updateProviderLabels();
+            renderAll();
         });
 
         elements.providerSelect.addEventListener("change", function() {
@@ -112,6 +138,7 @@
             elements.endpointInput.placeholder = config.addressPlaceholderFor(next);
             state.settings.model = "";
             elements.modelInput.value = "";
+            saveActiveChatPresetFromCurrent();
             renderModelOptions([]);
             clearFeedback();
             state.status = null;
@@ -124,6 +151,7 @@
 
         elements.openaiApiSelect.addEventListener("change", function() {
             state.settings.openaiApi = elements.openaiApiSelect.value;
+            saveActiveChatPresetFromCurrent();
             clearFeedback();
             state.status = null;
             saveSettings();
@@ -174,11 +202,7 @@
 
         elements.apiKeyInput.addEventListener("input", function() {
             var apiKey = elements.apiKeyInput.value.trim();
-            if (apiKey) {
-                localStorage.setItem(API_KEY, apiKey);
-            } else {
-                localStorage.removeItem(API_KEY);
-            }
+            saveActiveChatPresetFromCurrent();
         });
 
         elements.attachButton.addEventListener("click", function() {
@@ -229,6 +253,9 @@
         state.settings.maxTokens = Math.max(1, parseInt(elements.maxTokensInput.value, 10) || 2048);
         state.settings.reasoning = elements.reasoningSelect.value;
         state.settings.stream = elements.streamCheckbox.checked;
+        if (shouldSaveActiveChatPreset()) {
+            saveActiveChatPresetFromCurrent();
+        }
         clearFeedback();
         state.status = null;
         saveSettings();
@@ -241,9 +268,19 @@
         if (normalized && normalized !== elements.endpointInput.value.trim()) {
             elements.endpointInput.value = normalized;
             state.settings.endpoint = normalized;
+            saveActiveChatPresetFromCurrent();
             saveSettings();
         }
         updateRequestPreview();
+    }
+
+    function applySettingsToForm() {
+        elements.providerSelect.value = state.settings.provider;
+        elements.endpointInput.value = state.settings.endpoint;
+        elements.endpointInput.placeholder = config.addressPlaceholderFor(state.settings.provider);
+        elements.openaiApiSelect.value = state.settings.openaiApi;
+        elements.modelInput.value = state.settings.model;
+        elements.apiKeyInput.value = loadApiKey();
     }
 
     function loadSettings() {
@@ -275,7 +312,8 @@
     }
 
     function loadApiKey() {
-        return localStorage.getItem(API_KEY) || "";
+        var presetKey = presetsApi.apiKeyForPreset(state.activeChatPreset);
+        return presetKey || localStorage.getItem(API_KEY) || "";
     }
 
     function loadChats() {
@@ -321,11 +359,54 @@
     }
 
     function renderAll() {
+        renderChatPresetSelect();
         renderChatList();
         renderMessages();
         renderPendingImages();
         updateHeader();
         updateSendState();
+    }
+
+    function renderChatPresetSelect() {
+        state.chatPresets = presetsApi.presetsByKind("chat");
+        state.activeChatPreset = presetsApi.getActivePreset("chat");
+        elements.chatPresetSelect.textContent = "";
+        state.chatPresets.forEach(function(preset) {
+            var option = document.createElement("option");
+            option.value = preset.id;
+            option.textContent = preset.name;
+            elements.chatPresetSelect.appendChild(option);
+        });
+        if (state.activeChatPreset) {
+            elements.chatPresetSelect.value = state.activeChatPreset.id;
+        }
+    }
+
+    function saveActiveChatPresetFromCurrent() {
+        if (!state.activeChatPreset) {
+            return;
+        }
+        var next = Object.assign({}, state.activeChatPreset, {
+            provider: state.settings.provider,
+            endpoint: state.settings.endpoint,
+            apiKey: elements.apiKeyInput.value.trim(),
+            model: state.settings.model,
+            openaiApi: state.settings.openaiApi
+        });
+        presetsApi.upsertPreset(next);
+        state.activeChatPreset = next;
+        state.chatPresets = presetsApi.presetsByKind("chat");
+    }
+
+    function shouldSaveActiveChatPreset() {
+        if (!state.activeChatPreset) {
+            return false;
+        }
+        return state.activeChatPreset.provider !== state.settings.provider ||
+            state.activeChatPreset.endpoint !== state.settings.endpoint ||
+            state.activeChatPreset.model !== state.settings.model ||
+            state.activeChatPreset.openaiApi !== state.settings.openaiApi ||
+            state.activeChatPreset.apiKey !== elements.apiKeyInput.value.trim();
     }
 
     function renderChatList() {

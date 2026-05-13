@@ -4,7 +4,11 @@
     var STORAGE_KEYS = {
         chats: "qnlanyang.localAi.chats.v1",
         settings: "qnlanyang.localAi.settings.v1",
-        apiKey: "qnlanyang.localAi.apiKey.local"
+        apiKey: "qnlanyang.localAi.apiKey.local",
+        presets: "qnlanyang.localAi.providerPresets.v1",
+        activeChatPreset: "qnlanyang.localAi.activeChatPreset.v1",
+        activeImagePreset: "qnlanyang.localAi.activeImagePreset.v1",
+        imageJobs: "qnlanyang.localAi.imageJobs.v1"
     };
 
     var PROVIDERS = {
@@ -45,6 +49,37 @@
         }
     };
 
+    var IMAGE_PROVIDERS = {
+        openaiImages: {
+            label: "OpenAI Images",
+            mode: "openaiImages",
+            defaultAddress: "https://api.openai.com/v1/",
+            defaultScheme: "https",
+            versionPath: "/v1",
+            generationPath: "/images/generations",
+            editPath: "/images/edits",
+            defaultModel: "gpt-image-2"
+        },
+        geminiImages: {
+            label: "Gemini / Nano Banana",
+            mode: "geminiImages",
+            defaultAddress: "https://generativelanguage.googleapis.com/v1beta",
+            defaultScheme: "https",
+            generationPath: "/models/{model}:generateContent",
+            defaultModel: "gemini-2.5-flash-image"
+        },
+        customOpenAiImages: {
+            label: "OpenAI Images-compatible",
+            mode: "openaiImages",
+            defaultAddress: "",
+            defaultScheme: "https",
+            versionPath: "/v1",
+            generationPath: "/images/generations",
+            editPath: "/images/edits",
+            defaultModel: "gpt-image-2"
+        }
+    };
+
     var DEFAULT_SETTINGS = {
         provider: "lmstudio",
         endpoint: PROVIDERS.lmstudio.defaultAddress,
@@ -57,8 +92,56 @@
         stream: true
     };
 
+    var DEFAULT_CHAT_PRESETS = [
+        {
+            id: "chat-lmstudio-rest",
+            name: "LM Studio REST",
+            kind: "chat",
+            provider: "lmstudio",
+            endpoint: PROVIDERS.lmstudio.defaultAddress,
+            apiKey: "",
+            model: "",
+            openaiApi: "chat"
+        },
+        {
+            id: "chat-openai-compatible",
+            name: "OpenAI-compatible",
+            kind: "chat",
+            provider: "openai",
+            endpoint: "",
+            apiKey: "",
+            model: "",
+            openaiApi: "chat"
+        }
+    ];
+
+    var DEFAULT_IMAGE_PRESETS = [
+        {
+            id: "image-openai",
+            name: "OpenAI Images",
+            kind: "image",
+            provider: "openaiImages",
+            endpoint: IMAGE_PROVIDERS.openaiImages.defaultAddress,
+            apiKey: "",
+            model: IMAGE_PROVIDERS.openaiImages.defaultModel
+        },
+        {
+            id: "image-gemini",
+            name: "Gemini / Nano Banana",
+            kind: "image",
+            provider: "geminiImages",
+            endpoint: IMAGE_PROVIDERS.geminiImages.defaultAddress,
+            apiKey: "",
+            model: IMAGE_PROVIDERS.geminiImages.defaultModel
+        }
+    ];
+
     function getProvider(key) {
         return PROVIDERS[key] || PROVIDERS.lmstudio;
+    }
+
+    function getImageProvider(key) {
+        return IMAGE_PROVIDERS[key] || IMAGE_PROVIDERS.openaiImages;
     }
 
     function hasScheme(value) {
@@ -71,6 +154,15 @@
 
     function normalizeAddress(value, providerKey) {
         var provider = getProvider(providerKey);
+        return normalizeAddressForProvider(value, provider);
+    }
+
+    function normalizeImageAddress(value, providerKey) {
+        var provider = getImageProvider(providerKey);
+        return normalizeAddressForProvider(value, provider);
+    }
+
+    function normalizeAddressForProvider(value, provider) {
         var raw = (value || "").trim();
         if (!raw) {
             return "";
@@ -192,6 +284,22 @@
         return endpointFor(base, requestPathFor(settings, type));
     }
 
+    function imageRequestPathFor(preset, type) {
+        var provider = getImageProvider(preset.provider);
+        if (provider.mode === "geminiImages") {
+            return provider.generationPath.replace("{model}", encodeURIComponent(preset.model || provider.defaultModel));
+        }
+        if (type === "edit") {
+            return provider.editPath;
+        }
+        return provider.generationPath;
+    }
+
+    function imageRequestUrlFor(preset, type) {
+        var base = normalizeImageAddress(preset.endpoint, preset.provider);
+        return endpointFor(base, imageRequestPathFor(preset, type));
+    }
+
     function isDefaultAddress(providerKey, value) {
         var provider = getProvider(providerKey);
         if (!provider.defaultAddress || !value) {
@@ -208,16 +316,28 @@
         return provider.mode === "anthropic" ? "api.anthropic.com" : "api.example.com";
     }
 
+    function imageAddressPlaceholderFor(providerKey) {
+        var provider = getImageProvider(providerKey);
+        return provider.defaultAddress || "api.example.com";
+    }
+
     window.LocalAiConfig = {
         STORAGE_KEYS: STORAGE_KEYS,
         PROVIDERS: PROVIDERS,
+        IMAGE_PROVIDERS: IMAGE_PROVIDERS,
         DEFAULT_SETTINGS: DEFAULT_SETTINGS,
+        DEFAULT_CHAT_PRESETS: DEFAULT_CHAT_PRESETS,
+        DEFAULT_IMAGE_PRESETS: DEFAULT_IMAGE_PRESETS,
         getProvider: getProvider,
+        getImageProvider: getImageProvider,
         normalizeAddress: normalizeAddress,
+        normalizeImageAddress: normalizeImageAddress,
         endpointFor: endpointFor,
         requestPathFor: requestPathFor,
         requestUrlFor: requestUrlFor,
+        imageRequestUrlFor: imageRequestUrlFor,
         isDefaultAddress: isDefaultAddress,
-        addressPlaceholderFor: addressPlaceholderFor
+        addressPlaceholderFor: addressPlaceholderFor,
+        imageAddressPlaceholderFor: imageAddressPlaceholderFor
     };
 })(window);
