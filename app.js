@@ -349,6 +349,17 @@
                 chat.messages = [];
                 changed = true;
             }
+            if (chat.responsesState && typeof chat.responsesState !== "object") {
+                chat.responsesState = null;
+                changed = true;
+            }
+            if (chat.responsesState) {
+                chat.responsesState.responseId = chat.responsesState.responseId || "";
+                chat.responsesState.signature = chat.responsesState.signature || "";
+                chat.responsesState.transport = chat.responsesState.transport || "";
+                chat.responsesState.dirty = Boolean(chat.responsesState.dirty);
+                chat.responsesState.downgradedFromRest = Boolean(chat.responsesState.downgradedFromRest);
+            }
             chat.messages.forEach(function(message) {
                 if (!message.id) {
                     message.id = newMessageId();
@@ -402,6 +413,12 @@
             state.activeChatId = chat.id;
         }
         return chat;
+    }
+
+    function findMessage(chat, messageId) {
+        return chat.messages.find(function(message) {
+            return message.id === messageId;
+        });
     }
 
     function renderAll() {
@@ -672,10 +689,10 @@
         message.error = false;
         if (message.role === "user") {
             chat.messages = chat.messages.slice(0, index + 1);
-            chat.lmStudioResponseId = "";
+            markChatHistoryDirty(chat);
         } else if (message.role === "assistant") {
             chat.messages = chat.messages.slice(0, index + 1);
-            chat.lmStudioResponseId = "";
+            markChatHistoryDirty(chat);
         }
         chat.updatedAt = new Date().toISOString();
         state.editingMessageId = "";
@@ -701,19 +718,17 @@
         }
         var message = chat.messages[index];
         chat.messages = chat.messages.slice(0, index + 1);
-        chat.lmStudioResponseId = "";
+        markChatHistoryDirty(chat);
         chat.updatedAt = new Date().toISOString();
         saveChats();
         renderAll();
         if (message.role === "user") {
             await requestAssistantForChat(chat);
-        } else {
-            var continueMessage = createMessage("user", "继续。");
-            chat.messages.push(continueMessage);
-            chat.updatedAt = new Date().toISOString();
-            saveChats();
-            await requestAssistantForChat(chat);
+            return;
         }
+        await requestAssistantForChat(chat, {
+            continueMessageId: message.id
+        });
     }
 
     async function regenerateAssistant(chat, messageId) {
@@ -727,7 +742,7 @@
             return;
         }
         chat.messages = chat.messages.slice(0, index);
-        chat.lmStudioResponseId = "";
+        markChatHistoryDirty(chat);
         var previousUser = chat.messages.slice().reverse().find(function(message) {
             return message.role === "user" && hasMessageContent(message);
         });
@@ -780,6 +795,13 @@
         elements.providerLabel.textContent = provider.label;
         if (state.status) {
             applyStatus(state.status.text, state.status.tone);
+            return;
+        }
+        var chat = getActiveChat();
+        if (isLmStudioRestDowngraded(chat)) {
+            elements.statusText.textContent = provider.label + " · 已降级为 Responses · " + model;
+            elements.connectionPill.textContent = state.isSending ? "生成中" : "已降级为 Responses";
+            elements.connectionPill.className = "status-pill is-warn";
             return;
         }
         elements.statusText.textContent = provider.label + " · " + model;
@@ -889,23 +911,50 @@
         await requestAssistantForChat(chat);
     }
 
-    async function requestAssistantForChat(chat) {
-        var assistantMessage = createMessage("assistant", "");
-        chat.messages.push(assistantMessage);
+    async function requestAssistantForChat(chat, options) {
+        options = options || {};
+        var assistantMessage = options.continueMessageId ? findMessage(chat, options.continueMessageId) : null;
+        var continuingAssistant = false;
+        var continuationPrefix = "";
+        if (assistantMessage && assistantMessage.role === "assistant") {
+            continuingAssistant = true;
+            continuationPrefix = assistantMessage.content || "";
+            assistantMessage.error = false;
+        } else {
+            assistantMessage = createMessage("assistant", "");
+            chat.messages.push(assistantMessage);
+        }
         state.abortController = new AbortController();
         state.isSending = true;
-        setStatus("生成中", "ok");
-        setFeedback("正在请求 " + config.requestUrlFor(state.settings, "chat"), "ok");
+        setStatus(continuingAssistant ? "续写中" : "生成中", "ok");
+        setFeedback("正在请求 " + completionRequestUrlFor(chat, {
+            continuingAssistant: continuingAssistant
+        }), "ok");
         saveChats();
         renderAll();
 
         try {
-            await requestCompletion(chat, assistantMessage);
-            if (!assistantMessage.content.trim()) {
-                assistantMessage.content = "模型没有返回内容。";
+            await requestCompletion(chat, assistantMessage, {
+                chat: chat,
+                continuingAssistant: continuingAssistant,
+                continuationPrefix: continuationPrefix
+            });
+            if (continuingAssistant) {
+                assistantMessage.content = normalizeContinuationContent(assistantMessage.content, continuationPrefix);
+            }
+            if (!hasGeneratedAssistantContent(assistantMessage, continuationPrefix)) {
+                assistantMessage.content = continuationPrefix || "模型没有返回内容。";
+                if (continuingAssistant) {
+                    setFeedback("模型没有返回续写内容。", "warn");
+                }
             }
             setStatus("完成", "ok");
-            setFeedback("请求完成。", "ok");
+            if (isLmStudioRestDowngraded(chat)) {
+                state.status = null;
+            }
+            if (!continuingAssistant || hasGeneratedAssistantContent(assistantMessage, continuationPrefix)) {
+                setFeedback("请求完成。", "ok");
+            }
         } catch (error) {
             if (error.name === "AbortError") {
                 if (!assistantMessage.content.trim()) {
@@ -914,8 +963,13 @@
                 setStatus("已停止", "warn");
                 setFeedback("已停止生成。", "warn");
             } else {
-                assistantMessage.error = true;
-                assistantMessage.content = explainError(error);
+                if (continuingAssistant) {
+                    assistantMessage.error = false;
+                    assistantMessage.content = normalizeContinuationContent(assistantMessage.content || continuationPrefix, continuationPrefix);
+                } else {
+                    assistantMessage.error = true;
+                    assistantMessage.content = explainError(error);
+                }
                 setStatus("请求失败", "error");
                 setFeedback(explainError(error), "error");
             }
@@ -929,19 +983,23 @@
         }
     }
 
-    async function requestCompletion(chat, assistantMessage) {
+    async function requestCompletion(chat, assistantMessage, options) {
         var provider = config.getProvider(state.settings.provider);
         var messages = buildMessages(chat);
         if (provider.mode === "ollama") {
-            await requestOllama(messages, assistantMessage);
+            await requestOllama(messages, assistantMessage, options);
         } else if (provider.mode === "lmstudioRest") {
-            await requestLmStudioRest(chat, assistantMessage);
+            if (shouldUseLmStudioResponses(chat, options)) {
+                await requestLmStudioRestAsResponses(messages, assistantMessage, options);
+            } else {
+                await requestLmStudioRest(chat, assistantMessage);
+            }
         } else if (provider.mode === "anthropic") {
-            await requestAnthropic(messages, assistantMessage);
+            await requestAnthropic(messages, assistantMessage, options);
         } else if (state.settings.openaiApi === "responses") {
-            await requestOpenAiResponses(messages, assistantMessage);
+            await requestOpenAiResponses(messages, assistantMessage, options);
         } else {
-            await requestOpenAiCompatible(messages, assistantMessage);
+            await requestOpenAiCompatible(messages, assistantMessage, options);
         }
     }
 
@@ -967,7 +1025,138 @@
         return messages;
     }
 
-    async function requestOpenAiCompatible(messages, assistantMessage) {
+    function markChatHistoryDirty(chat) {
+        chat.lmStudioResponseId = "";
+        var responseState = ensureResponsesState(chat);
+        responseState.dirty = true;
+        responseState.responseId = "";
+        responseState.signature = "";
+    }
+
+    function ensureResponsesState(chat) {
+        if (!chat.responsesState || typeof chat.responsesState !== "object") {
+            chat.responsesState = {
+                responseId: "",
+                signature: "",
+                transport: "",
+                dirty: false,
+                downgradedFromRest: false
+            };
+        }
+        return chat.responsesState;
+    }
+
+    function isLmStudioRestDowngraded(chat) {
+        return Boolean(
+            chat &&
+            chat.responsesState &&
+            chat.responsesState.downgradedFromRest &&
+            config.getProvider(state.settings.provider).mode === "lmstudioRest"
+        );
+    }
+
+    function shouldUseLmStudioResponses(chat, options) {
+        return isLmStudioRestDowngraded(chat) ||
+            Boolean(options && options.continuingAssistant) ||
+            Boolean(chat.responsesState && chat.responsesState.dirty);
+    }
+
+    function completionRequestUrlFor(chat, options) {
+        var provider = config.getProvider(state.settings.provider);
+        if (provider.mode === "lmstudioRest" && shouldUseLmStudioResponses(chat, options || {})) {
+            return lmStudioOpenAiResponsesUrl();
+        }
+        return config.requestUrlFor(state.settings, "chat");
+    }
+
+    function applyAssistantContent(assistantMessage, content, options) {
+        var text = String(content || "");
+        if (!options || !options.continuingAssistant) {
+            assistantMessage.content = text;
+            return;
+        }
+        assistantMessage.content += text;
+    }
+
+    function applyAssistantReasoning(assistantMessage, reasoning, options) {
+        var text = String(reasoning || "");
+        if (!text) {
+            return;
+        }
+        if (!options || !options.continuingAssistant) {
+            assistantMessage.reasoning = text;
+            return;
+        }
+        assistantMessage.reasoning = assistantMessage.reasoning ? assistantMessage.reasoning + "\n\n" + text : text;
+    }
+
+    function normalizeContinuationContent(content, prefix) {
+        var full = String(content || "");
+        var start = String(prefix || "");
+        if (start && full.indexOf(start + start) === 0) {
+            return start + full.slice((start + start).length);
+        }
+        return full;
+    }
+
+    function hasGeneratedAssistantContent(assistantMessage, prefix) {
+        var current = String(assistantMessage.content || "");
+        var start = String(prefix || "");
+        if (!start) {
+            return Boolean(current.trim());
+        }
+        return current.length > start.length;
+    }
+
+    function responsesSignatureFor(responseUrl, responseTransport) {
+        return [
+            responseTransport,
+            responseUrl,
+            state.settings.model || "",
+            state.settings.systemPrompt.trim()
+        ].join("\n");
+    }
+
+    function latestOpenAiResponseInput(messages) {
+        for (var index = messages.length - 1; index >= 0; index -= 1) {
+            if (hasMessageContent(messages[index])) {
+                return [toOpenAiResponseInput(messages[index])];
+            }
+        }
+        return [];
+    }
+
+    function recordOpenAiResponsesSuccess(options, responseSignature, responseTransport, responseData) {
+        if (!options || !options.chat) {
+            return;
+        }
+        var responseState = ensureResponsesState(options.chat);
+        responseState.responseId = extractOpenAiResponseId(responseData);
+        responseState.signature = responseSignature;
+        responseState.transport = responseTransport;
+        responseState.dirty = false;
+        if (options.downgradedFromRest) {
+            responseState.downgradedFromRest = true;
+        }
+    }
+
+    function extractOpenAiResponseId(data) {
+        if (!data) {
+            return "";
+        }
+        if (typeof data.id === "string") {
+            return data.id;
+        }
+        if (typeof data.response_id === "string") {
+            return data.response_id;
+        }
+        if (data.response) {
+            return extractOpenAiResponseId(data.response);
+        }
+        return "";
+    }
+
+    async function requestOpenAiCompatible(messages, assistantMessage, options) {
         var body = {
             model: state.settings.model,
             messages: messages.map(toOpenAiChatMessage),
@@ -1003,14 +1192,29 @@
 
         var data = await response.json();
         var message = (((data.choices || [])[0] || {}).message || {});
-        assistantMessage.reasoning = markdown.reasoningTextFromObject(message);
-        assistantMessage.content = openAiMessageContent(message);
+        applyAssistantReasoning(assistantMessage, markdown.reasoningTextFromObject(message), options);
+        applyAssistantContent(assistantMessage, openAiMessageContent(message), options);
     }
 
-    async function requestOpenAiResponses(messages, assistantMessage) {
-        var input = messages.filter(function(message) {
+    async function requestOpenAiResponses(messages, assistantMessage, options) {
+        options = options || {};
+        var responseUrl = options.responsesUrl || config.requestUrlFor(state.settings, "chat");
+        var responseTransport = options.responseTransport || "openaiResponses";
+        var responseState = options.chat ? ensureResponsesState(options.chat) : null;
+        var responseSignature = responsesSignatureFor(responseUrl, responseTransport);
+        var usePreviousResponse = Boolean(
+            responseState &&
+            responseState.responseId &&
+            !responseState.dirty &&
+            responseState.signature === responseSignature &&
+            !options.continuingAssistant
+        );
+        var responseMessages = messages.filter(function(message) {
             return message.role !== "system";
-        }).map(toOpenAiResponseInput);
+        });
+        var input = usePreviousResponse ?
+            latestOpenAiResponseInput(responseMessages) :
+            responseMessages.map(toOpenAiResponseInput);
         var body = {
             model: state.settings.model,
             input: input,
@@ -1018,11 +1222,14 @@
             max_output_tokens: state.settings.maxTokens,
             stream: state.settings.stream
         };
+        if (usePreviousResponse) {
+            body.previous_response_id = responseState.responseId;
+        }
         if (state.settings.systemPrompt.trim()) {
             body.instructions = state.settings.systemPrompt.trim();
         }
         addResponsesReasoning(body);
-        var response = await fetch(config.requestUrlFor(state.settings, "chat"), {
+        var response = await fetch(responseUrl, {
             method: "POST",
             headers: requestHeaders({ auth: "bearer", json: true }),
             body: JSON.stringify(body),
@@ -1031,7 +1238,11 @@
         await ensureOk(response);
 
         if (state.settings.stream && response.body && isEventStream(response)) {
+            var completedResponse = null;
             await readSse(response, function(json) {
+                if (json.response && json.response.id) {
+                    completedResponse = json.response;
+                }
                 if (json.type === "response.output_text.delta" && typeof json.delta === "string") {
                     assistantMessage.content += json.delta;
                     scheduleMessageRender();
@@ -1043,23 +1254,26 @@
                     return;
                 }
                 if (json.type === "response.completed" && json.response) {
+                    completedResponse = json.response;
                     if (!String(assistantMessage.reasoning || "").trim()) {
-                        assistantMessage.reasoning = extractOpenAiResponseReasoning(json.response);
+                        applyAssistantReasoning(assistantMessage, extractOpenAiResponseReasoning(json.response), options);
                     }
-                    if (!assistantMessage.content.trim()) {
-                        assistantMessage.content = extractOpenAiResponseText(json.response);
+                    if (!hasGeneratedAssistantContent(assistantMessage, options.continuationPrefix || "")) {
+                        applyAssistantContent(assistantMessage, extractOpenAiResponseText(json.response), options);
                     }
                 }
                 if (json.type === "error" && json.error) {
                     throw new Error(json.error.message || "OpenAI Responses stream error");
                 }
             });
+            recordOpenAiResponsesSuccess(options, responseSignature, responseTransport, completedResponse);
             return;
         }
 
         var data = await response.json();
-        assistantMessage.reasoning = extractOpenAiResponseReasoning(data);
-        assistantMessage.content = extractOpenAiResponseText(data);
+        applyAssistantReasoning(assistantMessage, extractOpenAiResponseReasoning(data), options);
+        applyAssistantContent(assistantMessage, extractOpenAiResponseText(data), options);
+        recordOpenAiResponsesSuccess(options, responseSignature, responseTransport, data);
     }
 
     async function requestLmStudioRest(chat, assistantMessage) {
@@ -1126,7 +1340,31 @@
         assistantMessage.content = extractLmStudioRestText(data);
     }
 
-    async function requestOllama(messages, assistantMessage) {
+    async function requestLmStudioRestAsResponses(messages, assistantMessage, options) {
+        var responsesOptions = Object.assign({}, options, {
+            responsesUrl: lmStudioOpenAiResponsesUrl(),
+            responseTransport: "lmstudioRestResponses",
+            downgradedFromRest: true
+        });
+        await requestOpenAiResponses(messages, assistantMessage, responsesOptions);
+    }
+
+    function lmStudioOpenAiResponsesUrl() {
+        var restBase = config.normalizeAddress(state.settings.endpoint, "lmstudio");
+        try {
+            var url = new URL(restBase);
+            url.pathname = url.pathname.replace(/\/api\/v1\/?$/i, "/");
+            url.search = "";
+            url.hash = "";
+            restBase = url.toString();
+        } catch (error) {
+            restBase = state.settings.endpoint;
+        }
+        var openAiBase = config.normalizeAddress(restBase, "openai");
+        return config.endpointFor(openAiBase, "/responses");
+    }
+
+    async function requestOllama(messages, assistantMessage, options) {
         var body = {
             model: state.settings.model,
             messages: messages.map(toOllamaMessage),
@@ -1156,10 +1394,10 @@
         }
 
         var data = await response.json();
-        assistantMessage.content = (data.message && data.message.content) || "";
+        applyAssistantContent(assistantMessage, (data.message && data.message.content) || "", options);
     }
 
-    async function requestAnthropic(messages, assistantMessage) {
+    async function requestAnthropic(messages, assistantMessage, options) {
         var body = {
             model: state.settings.model,
             messages: messages.filter(function(message) {
@@ -1216,8 +1454,8 @@
         }
 
         var data = await response.json();
-        assistantMessage.reasoning = extractAnthropicReasoning(data);
-        assistantMessage.content = extractAnthropicText(data);
+        applyAssistantReasoning(assistantMessage, extractAnthropicReasoning(data), options);
+        applyAssistantContent(assistantMessage, extractAnthropicText(data), options);
     }
 
     function hasMessageContent(message) {
@@ -1259,6 +1497,12 @@
     }
 
     function toOpenAiResponseInput(message) {
+        if (!message.images || !message.images.length || message.role !== "user") {
+            return {
+                role: message.role,
+                content: message.content
+            };
+        }
         var content = [];
         if (message.content) {
             content.push({

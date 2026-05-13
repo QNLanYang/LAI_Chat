@@ -16,16 +16,16 @@
         lmstudio: {
             label: "LM Studio REST v1",
             mode: "lmstudioRest",
-            defaultAddress: "http://localhost:1234",
-            defaultScheme: "http",
+            defaultAddress: "localhost:1234",
+            defaultScheme: "auto",
             modelsPath: "/api/v1/models",
             chatPath: "/api/v1/chat"
         },
         ollama: {
             label: "Ollama",
             mode: "ollama",
-            defaultAddress: "http://localhost:11434",
-            defaultScheme: "http",
+            defaultAddress: "localhost:11434",
+            defaultScheme: "auto",
             modelsPath: "/api/tags",
             chatPath: "/api/chat"
         },
@@ -226,6 +226,9 @@
     }
 
     function defaultSchemeFor(value, provider) {
+        if (provider.defaultScheme === "auto") {
+            return isLocalAddress(value) ? "http" : "https";
+        }
         if (provider.defaultScheme !== "https") {
             return provider.defaultScheme;
         }

@@ -134,13 +134,18 @@
             return null;
         }
         var isImage = preset.kind === "image";
-        var provider = isImage ? config.getImageProvider(preset.provider) : config.getProvider(preset.provider);
+        var providerKey = preset.provider || (isImage ? "openaiImages" : "lmstudio");
+        var provider = isImage ? config.getImageProvider(providerKey) : config.getProvider(providerKey);
+        var endpoint = preset.endpoint || provider.defaultAddress || "";
+        if (!isImage && provider.defaultScheme === "auto" && provider.defaultAddress && config.isDefaultAddress(providerKey, endpoint)) {
+            endpoint = provider.defaultAddress;
+        }
         return {
             id: preset.id || preset.kind + "-" + Date.now(),
             name: preset.name || provider.label,
             kind: isImage ? "image" : "chat",
-            provider: preset.provider || (isImage ? "openaiImages" : "lmstudio"),
-            endpoint: preset.endpoint || provider.defaultAddress || "",
+            provider: providerKey,
+            endpoint: endpoint,
             apiKey: preset.apiKey || "",
             model: preset.model || provider.defaultModel || "",
             openaiApi: preset.openaiApi || "chat"
