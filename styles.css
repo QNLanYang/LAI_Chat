@@ -684,6 +684,51 @@ button {
     object-fit: cover;
 }
 
+.message-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.message-action {
+    min-height: 28px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--panel-soft);
+    color: var(--muted);
+    font-size: 12px;
+    padding: 4px 8px;
+}
+
+.message-action:hover {
+    border-color: rgba(15, 118, 110, 0.32);
+    color: var(--accent-strong);
+}
+
+.message-action:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.message-editor {
+    display: grid;
+    gap: 10px;
+}
+
+.message-editor textarea {
+    width: 100%;
+    min-height: 100px;
+    resize: vertical;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--ink);
+    line-height: 1.6;
+    outline: none;
+    padding: 10px 11px;
+}
+
 .settings-shell {
     min-height: 100dvh;
 }

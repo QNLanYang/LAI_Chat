@@ -23,6 +23,7 @@
         isLoadingModels: false,
         chatPresets: [],
         activeChatPreset: null,
+        editingMessageId: "",
         status: null
     };
 
@@ -319,10 +320,39 @@
     function loadChats() {
         try {
             var stored = JSON.parse(localStorage.getItem(CHAT_KEY) || "[]");
-            return Array.isArray(stored) ? stored : [];
+            return Array.isArray(stored) ? normalizeChats(stored) : [];
         } catch (error) {
             return [];
         }
+    }
+
+    function normalizeChats(chats) {
+        var changed = false;
+        var normalized = chats.map(function(chat) {
+            if (!Array.isArray(chat.messages)) {
+                chat.messages = [];
+                changed = true;
+            }
+            chat.messages.forEach(function(message) {
+                if (!message.id) {
+                    message.id = newMessageId();
+                    changed = true;
+                }
+                if (!Array.isArray(message.images)) {
+                    message.images = [];
+                    changed = true;
+                }
+                if (typeof message.reasoning !== "string") {
+                    message.reasoning = "";
+                    changed = true;
+                }
+            });
+            return chat;
+        });
+        if (changed) {
+            localStorage.setItem(CHAT_KEY, JSON.stringify(normalized));
+        }
+        return normalized;
     }
 
     function saveChats() {
@@ -494,9 +524,14 @@
 
             var body = document.createElement("div");
             body.className = "message-body";
-            renderMessageBody(body, message);
-            if (Array.isArray(message.images) && message.images.length) {
-                body.appendChild(renderMessageImages(message.images));
+            if (state.editingMessageId === message.id) {
+                renderMessageEditor(body, chat, message);
+            } else {
+                renderMessageBody(body, message);
+                if (Array.isArray(message.images) && message.images.length) {
+                    body.appendChild(renderMessageImages(message.images));
+                }
+                body.appendChild(renderMessageActions(chat, message));
             }
 
             article.appendChild(role);
@@ -526,6 +561,162 @@
             wrap.appendChild(img);
         });
         return wrap;
+    }
+
+    function renderMessageActions(chat, message) {
+        var actions = document.createElement("div");
+        actions.className = "message-actions";
+
+        if (message.role === "user") {
+            actions.appendChild(messageActionButton("编辑", function() {
+                state.editingMessageId = message.id;
+                renderMessages();
+            }));
+            actions.appendChild(messageActionButton("从这里继续", function() {
+                continueAfterMessage(chat, message.id);
+            }));
+        } else if (message.role === "assistant") {
+            actions.appendChild(messageActionButton("重新生成", function() {
+                regenerateAssistant(chat, message.id);
+            }));
+            actions.appendChild(messageActionButton("编辑", function() {
+                state.editingMessageId = message.id;
+                renderMessages();
+            }));
+            actions.appendChild(messageActionButton("从这里继续", function() {
+                continueAfterMessage(chat, message.id);
+            }));
+        }
+
+        return actions;
+    }
+
+    function messageActionButton(label, onClick) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "message-action";
+        button.textContent = label;
+        button.disabled = state.isSending;
+        button.addEventListener("click", function() {
+            var result = onClick();
+            if (result && typeof result.catch === "function") {
+                result.catch(function(error) {
+                    setFeedback(explainError(error), "error");
+                });
+            }
+        });
+        return button;
+    }
+
+    function renderMessageEditor(container, chat, message) {
+        var editor = document.createElement("div");
+        editor.className = "message-editor";
+        var textarea = document.createElement("textarea");
+        textarea.rows = Math.min(10, Math.max(3, String(message.content || "").split(/\r?\n/).length + 1));
+        textarea.value = message.content || "";
+
+        var actions = document.createElement("div");
+        actions.className = "message-actions";
+        actions.appendChild(messageActionButton("保存", function() {
+            saveMessageEdit(chat, message.id, textarea.value);
+        }));
+        actions.appendChild(messageActionButton("取消", function() {
+            state.editingMessageId = "";
+            renderMessages();
+        }));
+
+        editor.appendChild(textarea);
+        if (Array.isArray(message.images) && message.images.length) {
+            editor.appendChild(renderMessageImages(message.images));
+        }
+        editor.appendChild(actions);
+        container.appendChild(editor);
+        setTimeout(function() {
+            textarea.focus();
+        }, 0);
+    }
+
+    async function saveMessageEdit(chat, messageId, value) {
+        var index = chat.messages.findIndex(function(message) {
+            return message.id === messageId;
+        });
+        if (index === -1) {
+            state.editingMessageId = "";
+            renderMessages();
+            return;
+        }
+        var text = value.trim();
+        var message = chat.messages[index];
+        if (!text && (!Array.isArray(message.images) || !message.images.length)) {
+            setFeedback("消息内容不能为空。", "warn");
+            return;
+        }
+        message.content = text;
+        message.reasoning = "";
+        message.error = false;
+        if (message.role === "user") {
+            chat.messages = chat.messages.slice(0, index + 1);
+            chat.lmStudioResponseId = "";
+        } else if (message.role === "assistant") {
+            chat.messages = chat.messages.slice(0, index + 1);
+            chat.lmStudioResponseId = "";
+        }
+        chat.updatedAt = new Date().toISOString();
+        state.editingMessageId = "";
+        saveChats();
+        renderAll();
+        if (message.role === "user") {
+            await requestAssistantForChat(chat);
+        } else {
+            setFeedback("已保存，后续消息已截断。", "ok");
+            elements.promptInput.focus();
+        }
+    }
+
+    async function continueAfterMessage(chat, messageId) {
+        if (state.isSending) {
+            return;
+        }
+        var index = chat.messages.findIndex(function(message) {
+            return message.id === messageId;
+        });
+        if (index === -1) {
+            return;
+        }
+        var message = chat.messages[index];
+        chat.messages = chat.messages.slice(0, index + 1);
+        chat.lmStudioResponseId = "";
+        chat.updatedAt = new Date().toISOString();
+        saveChats();
+        renderAll();
+        if (message.role === "user") {
+            await requestAssistantForChat(chat);
+        } else {
+            setFeedback("已从这条消息后继续。", "ok");
+            elements.promptInput.focus();
+        }
+    }
+
+    async function regenerateAssistant(chat, messageId) {
+        if (state.isSending) {
+            return;
+        }
+        var index = chat.messages.findIndex(function(message) {
+            return message.id === messageId;
+        });
+        if (index === -1) {
+            return;
+        }
+        chat.messages = chat.messages.slice(0, index);
+        chat.lmStudioResponseId = "";
+        var previousUser = chat.messages.slice().reverse().find(function(message) {
+            return message.role === "user" && hasMessageContent(message);
+        });
+        if (!previousUser) {
+            setFeedback("没有可用于重新生成的用户消息。", "warn");
+            return;
+        }
+        await requestAssistantForChat(chat);
     }
 
     function renderPendingImages() {
@@ -666,8 +857,7 @@
 
         var chat = getActiveChat();
         var userMessage = createMessage("user", prompt, images);
-        var assistantMessage = createMessage("assistant", "");
-        chat.messages.push(userMessage, assistantMessage);
+        chat.messages.push(userMessage);
         chat.updatedAt = new Date().toISOString();
         if (chat.title === "新会话") {
             chat.title = makeTitle(prompt);
@@ -677,6 +867,12 @@
         renderPendingImages();
         autosizePrompt();
 
+        await requestAssistantForChat(chat);
+    }
+
+    async function requestAssistantForChat(chat) {
+        var assistantMessage = createMessage("assistant", "");
+        chat.messages.push(assistantMessage);
         state.abortController = new AbortController();
         state.isSending = true;
         setStatus("生成中", "ok");
@@ -1677,12 +1873,17 @@
 
     function createMessage(role, content, images) {
         return {
+            id: newMessageId(),
             role: role,
             content: content,
             reasoning: "",
             images: images || [],
             createdAt: new Date().toISOString()
         };
+    }
+
+    function newMessageId() {
+        return "msg-" + Date.now() + "-" + Math.random().toString(16).slice(2);
     }
 
     function makeTitle(text) {

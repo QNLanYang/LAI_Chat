@@ -6,8 +6,12 @@
 
     function loadPresets() {
         var stored = readJson(KEYS.presets, null);
-        var presets = Array.isArray(stored) ? stored : defaultPresets();
-        return ensureDefaults(presets).map(normalizePreset).filter(Boolean);
+        if (Array.isArray(stored)) {
+            return stored.map(normalizePreset).filter(Boolean);
+        }
+        var presets = defaultPresets();
+        savePresets(presets);
+        return presets.map(normalizePreset).filter(Boolean);
     }
 
     function savePresets(presets) {
@@ -123,16 +127,6 @@
         return config.DEFAULT_CHAT_PRESETS.concat(config.DEFAULT_IMAGE_PRESETS).map(function(preset) {
             return Object.assign({}, preset);
         });
-    }
-
-    function ensureDefaults(presets) {
-        var merged = presets.slice();
-        defaultPresets().forEach(function(defaultPreset) {
-            if (!merged.some(function(preset) { return preset.id === defaultPreset.id; })) {
-                merged.push(defaultPreset);
-            }
-        });
-        return merged;
     }
 
     function normalizePreset(preset) {
