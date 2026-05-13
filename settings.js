@@ -135,7 +135,7 @@
         elements.presetModelInput.value = state.active.model || "";
         elements.presetOpenAiApiSelect.value = state.active.openaiApi || "chat";
         elements.presetApiKeyInput.value = state.active.apiKey || "";
-        elements.presetOpenAiApiField.hidden = state.kind !== "chat" || state.active.provider !== "openai";
+        updateOpenAiApiVisibility(state.active.provider);
         elements.presetEndpointInput.placeholder = state.kind === "image" ?
             config.imageAddressPlaceholderFor(state.active.provider) :
             config.addressPlaceholderFor(state.active.provider);
@@ -199,5 +199,9 @@
     function setFeedback(text, tone) {
         elements.settingsFeedback.textContent = text;
         elements.settingsFeedback.className = "connection-feedback" + (tone ? " is-" + tone : "");
+    }
+
+    function updateOpenAiApiVisibility(provider) {
+        elements.presetOpenAiApiField.hidden = !(state.kind === "chat" && provider === "openai");
     }
 })();

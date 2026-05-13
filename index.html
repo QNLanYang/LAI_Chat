@@ -13,6 +13,7 @@
     <script src="vendor/marked.min.js" defer></script>
     <script src="markdown.js" defer></script>
     <script src="providers.js" defer></script>
+    <script src="theme.js" defer></script>
     <script src="presets.js" defer></script>
     <script src="app.js" defer></script>
 </head>
@@ -67,7 +68,7 @@
                     <span>地址</span>
                     <input id="endpointInput" type="text" inputmode="url" spellcheck="false" autocomplete="off">
                 </label>
-                <div class="request-preview" id="requestPreview" aria-live="polite"></div>
+                <div class="request-preview" id="requestPreview" aria-live="polite" hidden></div>
                 <label>
                     <span>模型</span>
                     <div class="model-picker" id="modelPicker">

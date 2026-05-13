@@ -8,7 +8,8 @@
         presets: "qnlanyang.localAi.providerPresets.v1",
         activeChatPreset: "qnlanyang.localAi.activeChatPreset.v1",
         activeImagePreset: "qnlanyang.localAi.activeImagePreset.v1",
-        imageJobs: "qnlanyang.localAi.imageJobs.v1"
+        imageJobs: "qnlanyang.localAi.imageJobs.v1",
+        theme: "qnlanyang.localAi.theme.v1"
     };
 
     var PROVIDERS = {

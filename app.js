@@ -95,6 +95,7 @@
         updateRequestPreview();
         updateProviderLabels();
         renderAll();
+        applyChatPageVisibility();
         autosizePrompt();
     }
 
@@ -243,6 +244,21 @@
         });
 
         elements.composer.addEventListener("submit", sendPrompt);
+    }
+
+    function applyChatPageVisibility() {
+        [
+            elements.providerSelect,
+            elements.openaiApiSelect,
+            elements.endpointInput,
+            elements.apiKeyInput
+        ].forEach(function(element) {
+            var label = element.closest("label");
+            if (label) {
+                label.hidden = true;
+            }
+        });
+        elements.requestPreview.hidden = true;
     }
 
     function syncSettingsFromForm() {
@@ -692,8 +708,11 @@
         if (message.role === "user") {
             await requestAssistantForChat(chat);
         } else {
-            setFeedback("已从这条消息后继续。", "ok");
-            elements.promptInput.focus();
+            var continueMessage = createMessage("user", "继续。");
+            chat.messages.push(continueMessage);
+            chat.updatedAt = new Date().toISOString();
+            saveChats();
+            await requestAssistantForChat(chat);
         }
     }
 
@@ -770,8 +789,8 @@
 
     function updateProviderControls() {
         var isOpenAi = state.settings.provider === "openai";
-        elements.openaiApiField.hidden = !isOpenAi;
-        elements.openaiApiField.setAttribute("aria-hidden", isOpenAi ? "false" : "true");
+        elements.openaiApiField.hidden = true;
+        elements.openaiApiField.setAttribute("aria-hidden", "true");
         elements.openaiApiSelect.disabled = !isOpenAi || state.isSending;
         elements.openaiApiSelect.value = state.settings.openaiApi;
         elements.endpointInput.placeholder = config.addressPlaceholderFor(state.settings.provider);
