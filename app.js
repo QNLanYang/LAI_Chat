@@ -360,6 +360,14 @@
                 chat.responsesState.dirty = Boolean(chat.responsesState.dirty);
                 chat.responsesState.downgradedFromRest = Boolean(chat.responsesState.downgradedFromRest);
             }
+            if (chat.lmStudioRestState && typeof chat.lmStudioRestState !== "object") {
+                chat.lmStudioRestState = null;
+                changed = true;
+            }
+            if (chat.lmStudioRestState) {
+                chat.lmStudioRestState.responseId = chat.lmStudioRestState.responseId || "";
+                chat.lmStudioRestState.signature = chat.lmStudioRestState.signature || "";
+            }
             chat.messages.forEach(function(message) {
                 if (!message.id) {
                     message.id = newMessageId();
@@ -984,15 +992,40 @@
     }
 
     async function requestCompletion(chat, assistantMessage, options) {
+        try {
+            await requestCompletionOnce(chat, assistantMessage, options || {});
+        } catch (error) {
+            if (!disableUnsupportedReasoning(error)) {
+                throw error;
+            }
+            resetAssistantMessageForRetry(assistantMessage, options || {});
+            await requestCompletionOnce(chat, assistantMessage, options || {});
+        }
+    }
+
+    async function requestCompletionOnce(chat, assistantMessage, options) {
         var provider = config.getProvider(state.settings.provider);
         var messages = buildMessages(chat);
+        options = Object.assign({}, options, {
+            messages: messages
+        });
         if (provider.mode === "ollama") {
             await requestOllama(messages, assistantMessage, options);
         } else if (provider.mode === "lmstudioRest") {
             if (shouldUseLmStudioResponses(chat, options)) {
                 await requestLmStudioRestAsResponses(messages, assistantMessage, options);
             } else {
-                await requestLmStudioRest(chat, assistantMessage);
+                try {
+                    await requestLmStudioRest(chat, assistantMessage);
+                } catch (error) {
+                    if (!hasReplayContext(messages) || !shouldFallbackToFullHistory(error)) {
+                        throw error;
+                    }
+                    resetAssistantMessageForRetry(assistantMessage, options);
+                    markChatHistoryDirty(chat);
+                    setFeedback("REST 状态不可用，已改用 Responses 按完整历史重试。", "warn");
+                    await requestLmStudioRestAsResponses(messages, assistantMessage, options);
+                }
             }
         } else if (provider.mode === "anthropic") {
             await requestAnthropic(messages, assistantMessage, options);
@@ -1027,6 +1060,7 @@
 
     function markChatHistoryDirty(chat) {
         chat.lmStudioResponseId = "";
+        chat.lmStudioRestState = null;
         var responseState = ensureResponsesState(chat);
         responseState.dirty = true;
         responseState.responseId = "";
@@ -1056,9 +1090,11 @@
     }
 
     function shouldUseLmStudioResponses(chat, options) {
+        var messages = options && Array.isArray(options.messages) ? options.messages : [];
         return isLmStudioRestDowngraded(chat) ||
             Boolean(options && options.continuingAssistant) ||
-            Boolean(chat.responsesState && chat.responsesState.dirty);
+            Boolean(chat.responsesState && chat.responsesState.dirty) ||
+            (!hasValidLmStudioRestState(chat) && hasReplayContext(messages));
     }
 
     function completionRequestUrlFor(chat, options) {
@@ -1067,6 +1103,94 @@
             return lmStudioOpenAiResponsesUrl();
         }
         return config.requestUrlFor(state.settings, "chat");
+    }
+
+    function lmStudioRestSignatureFor() {
+        return [
+            config.requestUrlFor(state.settings, "chat"),
+            state.settings.model || "",
+            state.settings.systemPrompt.trim()
+        ].join("\n");
+    }
+
+    function hasValidLmStudioRestState(chat) {
+        return Boolean(
+            chat &&
+            chat.lmStudioRestState &&
+            chat.lmStudioRestState.responseId &&
+            chat.lmStudioRestState.signature === lmStudioRestSignatureFor()
+        );
+    }
+
+    function lmStudioRestPreviousResponseId(chat) {
+        return hasValidLmStudioRestState(chat) ? chat.lmStudioRestState.responseId : "";
+    }
+
+    function recordLmStudioRestSuccess(chat, data) {
+        var responseId = data && (data.response_id || data.id);
+        if (!responseId) {
+            return;
+        }
+        chat.lmStudioResponseId = responseId;
+        chat.lmStudioRestState = {
+            responseId: responseId,
+            signature: lmStudioRestSignatureFor()
+        };
+    }
+
+    function hasReplayContext(messages) {
+        var nonSystemMessages = messages.filter(function(message) {
+            return message.role !== "system" && hasMessageContent(message);
+        });
+        return nonSystemMessages.length > 1;
+    }
+
+    function shouldFallbackToFullHistory(error) {
+        var message = String(error && error.message ? error.message : error).toLowerCase();
+        return message.indexOf("previous_response_id") !== -1 ||
+            message.indexOf("response") !== -1 ||
+            message.indexOf("not found") !== -1 ||
+            message.indexOf("invalid") !== -1 ||
+            message.indexOf("expired") !== -1 ||
+            message.indexOf("cache") !== -1 ||
+            message.indexOf("state") !== -1 ||
+            message.indexOf("400") !== -1 ||
+            message.indexOf("404") !== -1 ||
+            message.indexOf("409") !== -1 ||
+            message.indexOf("422") !== -1;
+    }
+
+    function resetAssistantMessageForRetry(assistantMessage, options) {
+        assistantMessage.error = false;
+        assistantMessage.reasoning = "";
+        assistantMessage.content = options && options.continuingAssistant ? options.continuationPrefix || "" : "";
+    }
+
+    function disableUnsupportedReasoning(error) {
+        if (!state.settings.reasoning || state.settings.reasoning === "auto") {
+            return false;
+        }
+        if (!isUnsupportedReasoningError(error)) {
+            return false;
+        }
+        state.settings.reasoning = "auto";
+        elements.reasoningSelect.value = "auto";
+        saveSettings();
+        saveActiveChatPresetFromCurrent();
+        setFeedback("当前模型不支持所选思考模式，已切换为自动并重试。", "warn");
+        return true;
+    }
+
+    function isUnsupportedReasoningError(error) {
+        var message = String(error && error.message ? error.message : error).toLowerCase();
+        return message.indexOf("reasoning") !== -1 &&
+            (
+                message.indexOf("support") !== -1 ||
+                message.indexOf("unsupported") !== -1 ||
+                message.indexOf("not available") !== -1 ||
+                message.indexOf("invalid") !== -1 ||
+                message.indexOf("不支持") !== -1
+            );
     }
 
     function applyAssistantContent(assistantMessage, content, options) {
@@ -1202,13 +1326,55 @@
         var responseTransport = options.responseTransport || "openaiResponses";
         var responseState = options.chat ? ensureResponsesState(options.chat) : null;
         var responseSignature = responsesSignatureFor(responseUrl, responseTransport);
-        var usePreviousResponse = Boolean(
+        var usePreviousResponse = shouldUsePreviousOpenAiResponse(responseState, responseSignature, options);
+        await sendOpenAiResponsesRequest({
+            messages: messages,
+            assistantMessage: assistantMessage,
+            options: options,
+            responseUrl: responseUrl,
+            responseTransport: responseTransport,
+            responseSignature: responseSignature,
+            usePreviousResponse: usePreviousResponse
+        });
+    }
+
+    function shouldUsePreviousOpenAiResponse(responseState, responseSignature, options) {
+        return Boolean(
             responseState &&
             responseState.responseId &&
             !responseState.dirty &&
             responseState.signature === responseSignature &&
             !options.continuingAssistant
         );
+    }
+
+    async function sendOpenAiResponsesRequest(request) {
+        try {
+            await sendOpenAiResponsesRequestOnce(request);
+        } catch (error) {
+            if (!request.usePreviousResponse || !request.options.chat || !shouldFallbackToFullHistory(error)) {
+                throw error;
+            }
+            var responseState = ensureResponsesState(request.options.chat);
+            responseState.responseId = "";
+            responseState.dirty = true;
+            resetAssistantMessageForRetry(request.assistantMessage, request.options);
+            setFeedback("Responses 状态不可用，已按完整历史重试。", "warn");
+            await sendOpenAiResponsesRequestOnce(Object.assign({}, request, {
+                usePreviousResponse: false
+            }));
+        }
+    }
+
+    async function sendOpenAiResponsesRequestOnce(request) {
+        var messages = request.messages;
+        var assistantMessage = request.assistantMessage;
+        var options = request.options;
+        var responseUrl = request.responseUrl;
+        var responseTransport = request.responseTransport;
+        var responseSignature = request.responseSignature;
+        var usePreviousResponse = request.usePreviousResponse;
+        var responseState = options.chat ? ensureResponsesState(options.chat) : null;
         var responseMessages = messages.filter(function(message) {
             return message.role !== "system";
         });
@@ -1294,8 +1460,9 @@
         if (state.settings.systemPrompt.trim()) {
             body.system_prompt = state.settings.systemPrompt.trim();
         }
-        if (chat.lmStudioResponseId) {
-            body.previous_response_id = chat.lmStudioResponseId;
+        var previousResponseId = lmStudioRestPreviousResponseId(chat);
+        if (previousResponseId) {
+            body.previous_response_id = previousResponseId;
         }
 
         var response = await fetch(config.requestUrlFor(state.settings, "chat"), {
@@ -1319,7 +1486,7 @@
                     return;
                 }
                 if (json.type === "chat.end" && json.result) {
-                    chat.lmStudioResponseId = json.result.response_id || chat.lmStudioResponseId;
+                    recordLmStudioRestSuccess(chat, json.result);
                     if (!String(assistantMessage.reasoning || "").trim()) {
                         assistantMessage.reasoning = extractLmStudioRestReasoning(json.result);
                     }
@@ -1335,7 +1502,7 @@
         }
 
         var data = await response.json();
-        chat.lmStudioResponseId = data.response_id || chat.lmStudioResponseId;
+        recordLmStudioRestSuccess(chat, data);
         assistantMessage.reasoning = extractLmStudioRestReasoning(data);
         assistantMessage.content = extractLmStudioRestText(data);
     }
@@ -1528,7 +1695,7 @@
         }
         var input = [];
         input.push({
-            type: "message",
+            type: "text",
             content: message.content || " "
         });
         message.images.forEach(function(image) {
