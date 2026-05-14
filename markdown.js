@@ -94,9 +94,47 @@
         var body = document.createElement("div");
         body.className = "markdown-body";
         body.innerHTML = markdownToHtml(text);
+        var preview = document.createElement("pre");
+        preview.className = "reasoning-preview";
+        preview.textContent = lastReasoningLines(text, 3);
         details.appendChild(summary);
+        details.appendChild(preview);
         details.appendChild(body);
         return details;
+    }
+
+    function lastReasoningLines(text, count) {
+        var lines = String(text || "").replace(/\r\n/g, "\n").split("\n").map(function(line) {
+            return line.trimEnd();
+        }).filter(function(line) {
+            return line.trim();
+        });
+        var visualLines = [];
+        lines.forEach(function(line) {
+            visualLines = visualLines.concat(wrapPreviewLine(line, 96));
+        });
+        return visualLines.slice(-count).join("\n");
+    }
+
+    function wrapPreviewLine(line, size) {
+        var text = String(line || "");
+        if (text.length <= size) {
+            return [text];
+        }
+        var chunks = [];
+        var remaining = text;
+        while (remaining.length > size) {
+            var cut = remaining.lastIndexOf(" ", size);
+            if (cut < Math.floor(size * 0.55)) {
+                cut = size;
+            }
+            chunks.push(remaining.slice(0, cut).trimEnd());
+            remaining = remaining.slice(cut).trimStart();
+        }
+        if (remaining) {
+            chunks.push(remaining);
+        }
+        return chunks;
     }
 
     function markdownToHtml(text) {
@@ -143,7 +181,7 @@
                 return candidate.map(reasoningTextFromObject).join("");
             }
             return reasoningTextFromObject(candidate);
-        }).join("").trim();
+        }).join("");
     }
 
     function escapeHtml(text) {

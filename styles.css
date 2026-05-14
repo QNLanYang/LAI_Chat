@@ -19,6 +19,9 @@
     --accent-strong: #0b5f59;
     --warn: #a15608;
     --danger: #b42318;
+    --scrollbar-track: rgba(220, 227, 223, 0.34);
+    --scrollbar-thumb: rgba(104, 113, 118, 0.34);
+    --scrollbar-thumb-hover: rgba(15, 118, 110, 0.56);
     --shadow: 0 18px 42px rgba(38, 49, 55, 0.12);
 }
 
@@ -43,6 +46,9 @@
     --accent-strong: #62d2c6;
     --warn: #e0a34e;
     --danger: #f16d5f;
+    --scrollbar-track: rgba(43, 54, 51, 0.38);
+    --scrollbar-thumb: rgba(156, 169, 165, 0.34);
+    --scrollbar-thumb-hover: rgba(98, 210, 198, 0.58);
     --shadow: 0 18px 42px rgba(0, 0, 0, 0.36);
 }
 
@@ -57,6 +63,39 @@
 html,
 body {
     min-height: 100%;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    scrollbar-width: thin;
+}
+
+* {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+    min-height: 42px;
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: var(--scrollbar-thumb);
+    background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+    background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+    background: transparent;
 }
 
 ::selection {
@@ -699,10 +738,23 @@ button {
     color: var(--muted);
 }
 
-.reasoning-block.is-live-preview:not(.is-user-open) .markdown-body {
+.reasoning-preview {
+    display: none;
     max-height: 4.8em;
-    overflow-y: auto;
-    overscroll-behavior: contain;
+    overflow: hidden;
+    margin: 8px 0 0;
+    white-space: pre-wrap;
+    color: var(--muted);
+    font: inherit;
+    line-height: 1.55;
+}
+
+.reasoning-block.is-live-preview:not(.is-user-open) .reasoning-preview {
+    display: block;
+}
+
+.reasoning-block.is-live-preview:not(.is-user-open) .markdown-body {
+    display: none;
 }
 
 .reasoning-block.is-live-preview:not(.is-user-open) summary::after {

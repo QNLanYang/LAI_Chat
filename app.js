@@ -657,14 +657,11 @@
             var key = block.dataset.reasoningKey;
             var current = state.reasoningOpenState[key] || {
                 open: false,
-                manual: false,
-                nearBottom: true
+                manual: false
             };
-            var body = block.querySelector(".markdown-body");
             state.reasoningOpenState[key] = {
                 open: block.open,
-                manual: current.manual || block.dataset.manualOpen === "true",
-                nearBottom: body ? body.scrollHeight - body.scrollTop - body.clientHeight < 12 : true
+                manual: current.manual || block.dataset.manualOpen === "true"
             };
         });
     }
@@ -686,7 +683,6 @@
             var key = block.dataset.reasoningKey;
             var current = state.reasoningOpenState[key] || null;
             var isLive = state.isSending && state.activeGeneratingMessageId === message.id && !message.reasoningComplete;
-            var wasNearBottom = current ? current.nearBottom : true;
             if (current && current.manual) {
                 block.open = current.open;
                 block.classList.add("is-user-open");
@@ -696,18 +692,15 @@
                 block.classList.add("is-live-preview");
                 state.reasoningOpenState[key] = {
                     open: true,
-                    manual: false,
-                    nearBottom: wasNearBottom
+                    manual: false
                 };
             } else {
                 block.open = false;
                 state.reasoningOpenState[key] = {
                     open: false,
-                    manual: false,
-                    nearBottom: true
+                    manual: false
                 };
             }
-            scrollReasoningBlockToBottom(block, wasNearBottom);
             block.querySelector("summary").addEventListener("click", function(event) {
                 if (block.classList.contains("is-live-preview") && !block.classList.contains("is-user-open")) {
                     event.preventDefault();
@@ -729,18 +722,6 @@
                 block.classList.add("is-user-open");
             });
         });
-    }
-
-    function scrollReasoningBlockToBottom(block) {
-        if (!block.classList.contains("is-live-preview")) {
-            return;
-        }
-        var body = block.querySelector(".markdown-body");
-        if (body && (arguments.length < 2 || arguments[1])) {
-            requestAnimationFrame(function() {
-                body.scrollTop = body.scrollHeight;
-            });
-        }
     }
 
     function renderMessageImages(images) {
