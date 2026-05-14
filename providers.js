@@ -90,6 +90,12 @@
         systemPrompt: "",
         temperature: 0.7,
         maxTokens: 2048,
+        topP: null,
+        topK: null,
+        minP: null,
+        repeatPenalty: null,
+        presencePenalty: null,
+        frequencyPenalty: null,
         stream: true
     };
 

@@ -50,6 +50,18 @@
             systemPromptInput: document.getElementById("systemPromptInput"),
             temperatureInput: document.getElementById("temperatureInput"),
             maxTokensInput: document.getElementById("maxTokensInput"),
+            topPField: document.getElementById("topPField"),
+            topPInput: document.getElementById("topPInput"),
+            topKField: document.getElementById("topKField"),
+            topKInput: document.getElementById("topKInput"),
+            minPField: document.getElementById("minPField"),
+            minPInput: document.getElementById("minPInput"),
+            repeatPenaltyField: document.getElementById("repeatPenaltyField"),
+            repeatPenaltyInput: document.getElementById("repeatPenaltyInput"),
+            presencePenaltyField: document.getElementById("presencePenaltyField"),
+            presencePenaltyInput: document.getElementById("presencePenaltyInput"),
+            frequencyPenaltyField: document.getElementById("frequencyPenaltyField"),
+            frequencyPenaltyInput: document.getElementById("frequencyPenaltyInput"),
             reasoningSelect: document.getElementById("reasoningSelect"),
             streamCheckbox: document.getElementById("streamCheckbox"),
             exportButton: document.getElementById("exportButton"),
@@ -83,7 +95,13 @@
         elements.modelInput.value = state.settings.model;
         elements.systemPromptInput.value = state.settings.systemPrompt;
         elements.temperatureInput.value = state.settings.temperature;
-        elements.maxTokensInput.value = state.settings.maxTokens;
+        elements.maxTokensInput.value = state.settings.maxTokens || 0;
+        elements.topPInput.value = optionalNumberValue(state.settings.topP);
+        elements.topKInput.value = optionalNumberValue(state.settings.topK);
+        elements.minPInput.value = optionalNumberValue(state.settings.minP);
+        elements.repeatPenaltyInput.value = optionalNumberValue(state.settings.repeatPenalty);
+        elements.presencePenaltyInput.value = optionalNumberValue(state.settings.presencePenalty);
+        elements.frequencyPenaltyInput.value = optionalNumberValue(state.settings.frequencyPenalty);
         elements.reasoningSelect.value = state.settings.reasoning;
         elements.streamCheckbox.checked = state.settings.stream;
         renderChatPresetSelect();
@@ -157,6 +175,7 @@
             clearFeedback();
             state.status = null;
             saveSettings();
+            updateParameterVisibility();
             updateRequestPreview();
             updateProviderLabels();
         });
@@ -171,6 +190,12 @@
             elements.systemPromptInput,
             elements.temperatureInput,
             elements.maxTokensInput,
+            elements.topPInput,
+            elements.topKInput,
+            elements.minPInput,
+            elements.repeatPenaltyInput,
+            elements.presencePenaltyInput,
+            elements.frequencyPenaltyInput,
             elements.reasoningSelect
         ].forEach(function(input) {
             input.addEventListener("input", syncSettingsFromForm);
@@ -267,7 +292,13 @@
         state.settings.openaiApi = elements.openaiApiSelect.value;
         state.settings.systemPrompt = elements.systemPromptInput.value;
         state.settings.temperature = clampNumber(elements.temperatureInput.value, 0, 2, 0.7);
-        state.settings.maxTokens = Math.max(1, parseInt(elements.maxTokensInput.value, 10) || 2048);
+        state.settings.maxTokens = parseTokenLimit(elements.maxTokensInput.value);
+        state.settings.topP = parseOptionalNumber(elements.topPInput.value, 0, 1);
+        state.settings.topK = parseOptionalInteger(elements.topKInput.value, 0);
+        state.settings.minP = parseOptionalNumber(elements.minPInput.value, 0, 1);
+        state.settings.repeatPenalty = parseOptionalNumber(elements.repeatPenaltyInput.value, 0, 4);
+        state.settings.presencePenalty = parseOptionalNumber(elements.presencePenaltyInput.value, -2, 2);
+        state.settings.frequencyPenalty = parseOptionalNumber(elements.frequencyPenaltyInput.value, -2, 2);
         state.settings.reasoning = elements.reasoningSelect.value;
         state.settings.stream = elements.streamCheckbox.checked;
         if (shouldSaveActiveChatPreset()) {
@@ -276,6 +307,7 @@
         clearFeedback();
         state.status = null;
         saveSettings();
+        updateParameterVisibility();
         updateRequestPreview();
         updateProviderLabels();
     }
@@ -297,6 +329,17 @@
         elements.endpointInput.placeholder = config.addressPlaceholderFor(state.settings.provider);
         elements.openaiApiSelect.value = state.settings.openaiApi;
         elements.modelInput.value = state.settings.model;
+        elements.systemPromptInput.value = state.settings.systemPrompt || "";
+        elements.temperatureInput.value = state.settings.temperature;
+        elements.maxTokensInput.value = state.settings.maxTokens || 0;
+        elements.topPInput.value = optionalNumberValue(state.settings.topP);
+        elements.topKInput.value = optionalNumberValue(state.settings.topK);
+        elements.minPInput.value = optionalNumberValue(state.settings.minP);
+        elements.repeatPenaltyInput.value = optionalNumberValue(state.settings.repeatPenalty);
+        elements.presencePenaltyInput.value = optionalNumberValue(state.settings.presencePenalty);
+        elements.frequencyPenaltyInput.value = optionalNumberValue(state.settings.frequencyPenalty);
+        elements.reasoningSelect.value = state.settings.reasoning || defaultSettings.reasoning;
+        elements.streamCheckbox.checked = Boolean(state.settings.stream);
         elements.apiKeyInput.value = loadApiKey();
     }
 
@@ -317,15 +360,29 @@
             if (!settings.reasoning) {
                 settings.reasoning = defaultSettings.reasoning;
             }
+            normalizeParameterSettings(settings);
             return settings;
         } catch (error) {
-            return Object.assign({}, defaultSettings);
+            var fallback = Object.assign({}, defaultSettings);
+            normalizeParameterSettings(fallback);
+            return fallback;
         }
     }
 
     function saveSettings() {
         var safeSettings = Object.assign({}, state.settings);
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(safeSettings));
+    }
+
+    function normalizeParameterSettings(settings) {
+        settings.temperature = clampNumber(settings.temperature, 0, 2, defaultSettings.temperature);
+        settings.maxTokens = parseTokenLimit(settings.maxTokens);
+        settings.topP = normalizeOptionalNumber(settings.topP, 0, 1);
+        settings.topK = normalizeOptionalInteger(settings.topK, 0);
+        settings.minP = normalizeOptionalNumber(settings.minP, 0, 1);
+        settings.repeatPenalty = normalizeOptionalNumber(settings.repeatPenalty, 0, 4);
+        settings.presencePenalty = normalizeOptionalNumber(settings.presencePenalty, -2, 2);
+        settings.frequencyPenalty = normalizeOptionalNumber(settings.frequencyPenalty, -2, 2);
     }
 
     function loadApiKey() {
@@ -616,6 +673,9 @@
             actions.appendChild(messageActionButton("从这里继续", function() {
                 continueAfterMessage(chat, message.id);
             }));
+            actions.appendChild(messageActionButton("删除", function() {
+                deleteMessage(chat, message.id);
+            }, "danger"));
         } else if (message.role === "assistant") {
             actions.appendChild(messageActionButton("重新生成", function() {
                 regenerateAssistant(chat, message.id);
@@ -627,15 +687,18 @@
             actions.appendChild(messageActionButton("从这里继续", function() {
                 continueAfterMessage(chat, message.id);
             }));
+            actions.appendChild(messageActionButton("删除", function() {
+                deleteMessage(chat, message.id);
+            }, "danger"));
         }
 
         return actions;
     }
 
-    function messageActionButton(label, onClick) {
+    function messageActionButton(label, onClick, tone) {
         var button = document.createElement("button");
         button.type = "button";
-        button.className = "message-action";
+        button.className = "message-action" + (tone ? " " + tone : "");
         button.textContent = label;
         button.disabled = state.isSending;
         button.addEventListener("click", function() {
@@ -712,6 +775,30 @@
             setFeedback("已保存，后续消息已截断。", "ok");
             elements.promptInput.focus();
         }
+    }
+
+    function deleteMessage(chat, messageId) {
+        if (state.isSending) {
+            return;
+        }
+        var index = chat.messages.findIndex(function(message) {
+            return message.id === messageId;
+        });
+        if (index === -1) {
+            return;
+        }
+        chat.messages.splice(index, 1);
+        if (state.editingMessageId === messageId) {
+            state.editingMessageId = "";
+        }
+        markChatHistoryDirty(chat);
+        chat.updatedAt = new Date().toISOString();
+        if (!chat.messages.length) {
+            chat.title = "新会话";
+        }
+        saveChats();
+        renderAll();
+        setFeedback("已删除这条消息。", "ok");
     }
 
     async function continueAfterMessage(chat, messageId) {
@@ -824,6 +911,80 @@
         elements.openaiApiSelect.disabled = !isOpenAi || state.isSending;
         elements.openaiApiSelect.value = state.settings.openaiApi;
         elements.endpointInput.placeholder = config.addressPlaceholderFor(state.settings.provider);
+        updateParameterVisibility();
+    }
+
+    function updateParameterVisibility() {
+        var provider = config.getProvider(state.settings.provider);
+        var capabilities = parameterCapabilitiesFor(provider);
+        setFieldVisible(elements.topPField, capabilities.topP);
+        setFieldVisible(elements.topKField, capabilities.topK);
+        setFieldVisible(elements.minPField, capabilities.minP);
+        setFieldVisible(elements.repeatPenaltyField, capabilities.repeatPenalty);
+        setFieldVisible(elements.presencePenaltyField, capabilities.presencePenalty);
+        setFieldVisible(elements.frequencyPenaltyField, capabilities.frequencyPenalty);
+        elements.topPInput.disabled = state.isSending || !capabilities.topP;
+        elements.topKInput.disabled = state.isSending || !capabilities.topK;
+        elements.minPInput.disabled = state.isSending || !capabilities.minP;
+        elements.repeatPenaltyInput.disabled = state.isSending || !capabilities.repeatPenalty;
+        elements.presencePenaltyInput.disabled = state.isSending || !capabilities.presencePenalty;
+        elements.frequencyPenaltyInput.disabled = state.isSending || !capabilities.frequencyPenalty;
+    }
+
+    function parameterCapabilitiesFor(provider) {
+        if (provider.mode === "ollama") {
+            return {
+                topP: true,
+                topK: true,
+                minP: true,
+                repeatPenalty: true,
+                presencePenalty: false,
+                frequencyPenalty: true
+            };
+        }
+        if (provider.mode === "lmstudioRest") {
+            return {
+                topP: true,
+                topK: true,
+                minP: true,
+                repeatPenalty: true,
+                presencePenalty: false,
+                frequencyPenalty: false
+            };
+        }
+        if (provider.mode === "anthropic") {
+            return {
+                topP: true,
+                topK: true,
+                minP: false,
+                repeatPenalty: false,
+                presencePenalty: false,
+                frequencyPenalty: false
+            };
+        }
+        if (state.settings.openaiApi === "responses") {
+            return {
+                topP: true,
+                topK: false,
+                minP: false,
+                repeatPenalty: false,
+                presencePenalty: false,
+                frequencyPenalty: false
+            };
+        }
+        return {
+            topP: true,
+            topK: false,
+            minP: false,
+            repeatPenalty: false,
+            presencePenalty: true,
+            frequencyPenalty: true
+        };
+    }
+
+    function setFieldVisible(field, visible) {
+        field.hidden = !visible;
+        field.setAttribute("aria-hidden", visible ? "false" : "true");
     }
 
     function updateRequestPreview() {
@@ -878,6 +1039,7 @@
         elements.apiKeyInput.disabled = state.isSending;
         elements.attachButton.disabled = state.isSending;
         elements.loadModelsButton.disabled = state.isSending || state.isLoadingModels;
+        updateParameterVisibility();
         if (state.isSending) {
             toggleModelMenu(false);
         }
@@ -945,7 +1107,8 @@
             await requestCompletion(chat, assistantMessage, {
                 chat: chat,
                 continuingAssistant: continuingAssistant,
-                continuationPrefix: continuationPrefix
+                continuationPrefix: continuationPrefix,
+                forceFullHistory: continuingAssistant
             });
             if (continuingAssistant) {
                 assistantMessage.content = normalizeContinuationContent(assistantMessage.content, continuationPrefix);
@@ -1005,7 +1168,7 @@
 
     async function requestCompletionOnce(chat, assistantMessage, options) {
         var provider = config.getProvider(state.settings.provider);
-        var messages = buildMessages(chat);
+        var messages = buildMessages(chat, options);
         options = Object.assign({}, options, {
             messages: messages
         });
@@ -1016,7 +1179,7 @@
                 await requestLmStudioRestAsResponses(messages, assistantMessage, options);
             } else {
                 try {
-                    await requestLmStudioRest(chat, assistantMessage);
+                    await requestLmStudioRest(chat, assistantMessage, options);
                 } catch (error) {
                     if (!hasReplayContext(messages) || !shouldFallbackToFullHistory(error)) {
                         throw error;
@@ -1036,7 +1199,7 @@
         }
     }
 
-    function buildMessages(chat) {
+    function buildMessages(chat, options) {
         var messages = chat.messages
             .filter(function(message) {
                 return !message.error && hasMessageContent(message);
@@ -1049,13 +1212,26 @@
                 };
             });
 
-        if (state.settings.systemPrompt.trim()) {
+        var systemPrompt = requestSystemPrompt(options);
+        if (systemPrompt) {
             messages.unshift({
                 role: "system",
-                content: state.settings.systemPrompt.trim()
+                content: systemPrompt
             });
         }
         return messages;
+    }
+
+    function requestSystemPrompt(options) {
+        var parts = [];
+        var base = String(state.settings.systemPrompt || "").trim();
+        if (base) {
+            parts.push(base);
+        }
+        if (options && options.continuingAssistant) {
+            parts.push("Continue the final assistant message exactly from where it ended. Do not repeat existing text, do not add a new user turn, and do not explain that you are continuing.");
+        }
+        return parts.join("\n\n");
     }
 
     function markChatHistoryDirty(chat) {
@@ -1126,12 +1302,18 @@
         return hasValidLmStudioRestState(chat) ? chat.lmStudioRestState.responseId : "";
     }
 
-    function recordLmStudioRestSuccess(chat, data) {
+    function recordLmStudioRestSuccess(chat, data, options) {
         var responseId = data && (data.response_id || data.id);
         if (!responseId) {
             return;
         }
         chat.lmStudioResponseId = responseId;
+        if (options && options.continuingAssistant) {
+            chat.lmStudioRestState = null;
+            var responseState = ensureResponsesState(chat);
+            responseState.dirty = true;
+            return;
+        }
         chat.lmStudioRestState = {
             responseId: responseId,
             signature: lmStudioRestSignatureFor()
@@ -1255,6 +1437,14 @@
             return;
         }
         var responseState = ensureResponsesState(options.chat);
+        if (options.continuingAssistant) {
+            responseState.responseId = "";
+            responseState.signature = "";
+            responseState.transport = responseTransport;
+            responseState.dirty = true;
+            responseState.downgradedFromRest = Boolean(responseState.downgradedFromRest || options.downgradedFromRest);
+            return;
+        }
         responseState.responseId = extractOpenAiResponseId(responseData);
         responseState.signature = responseSignature;
         responseState.transport = responseTransport;
@@ -1285,9 +1475,10 @@
             model: state.settings.model,
             messages: messages.map(toOpenAiChatMessage),
             temperature: state.settings.temperature,
-            max_tokens: state.settings.maxTokens,
             stream: state.settings.stream
         };
+        addMaxTokens(body, "max_tokens");
+        addSamplerParams(body, "openaiChat");
         addChatReasoning(body);
         var response = await fetch(config.requestUrlFor(state.settings, "chat"), {
             method: "POST",
@@ -1344,6 +1535,7 @@
             responseState.responseId &&
             !responseState.dirty &&
             responseState.signature === responseSignature &&
+            !options.forceFullHistory &&
             !options.continuingAssistant
         );
     }
@@ -1385,14 +1577,16 @@
             model: state.settings.model,
             input: input,
             temperature: state.settings.temperature,
-            max_output_tokens: state.settings.maxTokens,
             stream: state.settings.stream
         };
+        addMaxTokens(body, "max_output_tokens");
+        addSamplerParams(body, "openaiResponses");
         if (usePreviousResponse) {
             body.previous_response_id = responseState.responseId;
         }
-        if (state.settings.systemPrompt.trim()) {
-            body.instructions = state.settings.systemPrompt.trim();
+        var systemPrompt = requestSystemPrompt(options);
+        if (systemPrompt) {
+            body.instructions = systemPrompt;
         }
         addResponsesReasoning(body);
         var response = await fetch(responseUrl, {
@@ -1442,23 +1636,22 @@
         recordOpenAiResponsesSuccess(options, responseSignature, responseTransport, data);
     }
 
-    async function requestLmStudioRest(chat, assistantMessage) {
+    async function requestLmStudioRest(chat, assistantMessage, options) {
         var latestUserMessage = chat.messages.slice().reverse().find(function(message) {
             return message.role === "user" && hasMessageContent(message);
         });
         var body = {
             model: state.settings.model,
             input: latestUserMessage ? toLmStudioInput(latestUserMessage) : "",
-            stream: state.settings.stream,
-            max_output_tokens: state.settings.maxTokens
+            stream: state.settings.stream
         };
+        addMaxTokens(body, "max_output_tokens");
+        addSamplerParams(body, "lmstudioRest");
 
         addLmStudioReasoning(body);
-        if (state.settings.temperature !== null && state.settings.temperature !== undefined) {
-            body.temperature = state.settings.temperature;
-        }
-        if (state.settings.systemPrompt.trim()) {
-            body.system_prompt = state.settings.systemPrompt.trim();
+        var systemPrompt = requestSystemPrompt(options);
+        if (systemPrompt) {
+            body.system_prompt = systemPrompt;
         }
         var previousResponseId = lmStudioRestPreviousResponseId(chat);
         if (previousResponseId) {
@@ -1486,7 +1679,7 @@
                     return;
                 }
                 if (json.type === "chat.end" && json.result) {
-                    recordLmStudioRestSuccess(chat, json.result);
+                    recordLmStudioRestSuccess(chat, json.result, options);
                     if (!String(assistantMessage.reasoning || "").trim()) {
                         assistantMessage.reasoning = extractLmStudioRestReasoning(json.result);
                     }
@@ -1502,7 +1695,7 @@
         }
 
         var data = await response.json();
-        recordLmStudioRestSuccess(chat, data);
+        recordLmStudioRestSuccess(chat, data, options);
         assistantMessage.reasoning = extractLmStudioRestReasoning(data);
         assistantMessage.content = extractLmStudioRestText(data);
     }
@@ -1536,11 +1729,9 @@
             model: state.settings.model,
             messages: messages.map(toOllamaMessage),
             stream: state.settings.stream,
-            options: {
-                temperature: state.settings.temperature,
-                num_predict: state.settings.maxTokens
-            }
+            options: {}
         };
+        addOllamaOptions(body.options);
         var response = await fetch(config.requestUrlFor(state.settings, "chat"), {
             method: "POST",
             headers: requestHeaders({ json: true }),
@@ -1570,11 +1761,14 @@
             messages: messages.filter(function(message) {
                 return message.role !== "system";
             }).map(toAnthropicMessage),
-            max_tokens: state.settings.maxTokens,
+            max_tokens: anthropicMaxTokens(),
+            temperature: state.settings.temperature,
             stream: state.settings.stream
         };
-        if (state.settings.systemPrompt.trim()) {
-            body.system = state.settings.systemPrompt.trim();
+        addSamplerParams(body, "anthropic");
+        var systemPrompt = requestSystemPrompt(options);
+        if (systemPrompt) {
+            body.system = systemPrompt;
         }
 
         var response = await fetch(config.requestUrlFor(state.settings, "chat"), {
@@ -1750,6 +1944,59 @@
         };
     }
 
+    function addMaxTokens(body, key) {
+        if (state.settings.maxTokens > 0) {
+            body[key] = state.settings.maxTokens;
+        }
+    }
+
+    function anthropicMaxTokens() {
+        return state.settings.maxTokens > 0 ? state.settings.maxTokens : defaultSettings.maxTokens;
+    }
+
+    function addSamplerParams(body, target) {
+        if (target === "openaiChat") {
+            addOptionalParam(body, "top_p", state.settings.topP);
+            addOptionalParam(body, "presence_penalty", state.settings.presencePenalty);
+            addOptionalParam(body, "frequency_penalty", state.settings.frequencyPenalty);
+            return;
+        }
+        if (target === "openaiResponses") {
+            addOptionalParam(body, "top_p", state.settings.topP);
+            return;
+        }
+        if (target === "anthropic") {
+            addOptionalParam(body, "top_p", state.settings.topP);
+            addOptionalParam(body, "top_k", state.settings.topK);
+            return;
+        }
+        if (target === "lmstudioRest") {
+            addOptionalParam(body, "temperature", state.settings.temperature);
+            addOptionalParam(body, "top_p", state.settings.topP);
+            addOptionalParam(body, "top_k", state.settings.topK);
+            addOptionalParam(body, "min_p", state.settings.minP);
+            addOptionalParam(body, "repeat_penalty", state.settings.repeatPenalty);
+        }
+    }
+
+    function addOllamaOptions(options) {
+        addOptionalParam(options, "temperature", state.settings.temperature);
+        if (state.settings.maxTokens > 0) {
+            options.num_predict = state.settings.maxTokens;
+        }
+        addOptionalParam(options, "top_p", state.settings.topP);
+        addOptionalParam(options, "top_k", state.settings.topK);
+        addOptionalParam(options, "min_p", state.settings.minP);
+        addOptionalParam(options, "repeat_penalty", state.settings.repeatPenalty);
+        addOptionalParam(options, "frequency_penalty", state.settings.frequencyPenalty);
+    }
+
+    function addOptionalParam(body, key, value) {
+        if (value !== null && value !== undefined && value !== "") {
+            body[key] = value;
+        }
+    }
+
     function addLmStudioReasoning(body) {
         var reasoning = state.settings.reasoning;
         if (!reasoning || reasoning === "auto") {
@@ -1757,8 +2004,14 @@
         }
         if (reasoning === "off") {
             body.reasoning = "off";
-        } else {
+        } else if (reasoning === "on") {
             body.reasoning = "on";
+        } else if (reasoning === "minimal") {
+            body.reasoning = "low";
+        } else if (reasoning === "xhigh") {
+            body.reasoning = "high";
+        } else {
+            body.reasoning = reasoning;
         }
     }
 
@@ -1769,6 +2022,9 @@
         }
         if (reasoning === "off") {
             reasoning = "none";
+        }
+        if (reasoning === "on") {
+            reasoning = "medium";
         }
         body.reasoning = {
             effort: reasoning
@@ -1782,6 +2038,10 @@
         }
         if (reasoning === "off") {
             body.reasoning_effort = "none";
+            return;
+        }
+        if (reasoning === "on") {
+            body.reasoning_effort = "medium";
             return;
         }
         if (reasoning === "minimal") {
@@ -2341,6 +2601,54 @@
             hour: "2-digit",
             minute: "2-digit"
         });
+    }
+
+    function optionalNumberValue(value) {
+        return value === null || value === undefined ? "" : String(value);
+    }
+
+    function parseTokenLimit(value) {
+        var number = parseInt(value, 10);
+        if (!Number.isFinite(number) || number <= 0) {
+            return 0;
+        }
+        return number;
+    }
+
+    function parseOptionalNumber(value, min, max) {
+        if (value === null || value === undefined || String(value).trim() === "") {
+            return null;
+        }
+        return clampNumber(value, min, max, null);
+    }
+
+    function parseOptionalInteger(value, min) {
+        if (value === null || value === undefined || String(value).trim() === "") {
+            return null;
+        }
+        var number = parseInt(value, 10);
+        if (!Number.isFinite(number)) {
+            return null;
+        }
+        return Math.max(min, number);
+    }
+
+    function normalizeOptionalNumber(value, min, max) {
+        if (value === null || value === undefined || value === "") {
+            return null;
+        }
+        return clampNumber(value, min, max, null);
+    }
+
+    function normalizeOptionalInteger(value, min) {
+        if (value === null || value === undefined || value === "") {
+            return null;
+        }
+        var number = parseInt(value, 10);
+        if (!Number.isFinite(number)) {
+            return null;
+        }
+        return Math.max(min, number);
     }
 
     function clampNumber(value, min, max, fallback) {

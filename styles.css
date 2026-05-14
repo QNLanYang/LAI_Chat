@@ -762,6 +762,11 @@ button {
     color: var(--accent-strong);
 }
 
+.message-action.danger:hover {
+    border-color: rgba(180, 35, 24, 0.38);
+    color: var(--danger);
+}
+
 .message-action:disabled {
     cursor: not-allowed;
     opacity: 0.5;
