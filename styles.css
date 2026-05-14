@@ -124,6 +124,28 @@ button {
     font-size: 13px;
 }
 
+.brand .beta-note,
+.page-header .beta-note {
+    color: var(--accent-strong);
+    font-weight: 650;
+}
+
+.brand .issue-note,
+.page-header .issue-note {
+    font-size: 12px;
+}
+
+.brand .issue-note a,
+.page-header .issue-note a {
+    color: var(--accent-strong);
+    text-decoration: none;
+}
+
+.brand .issue-note a:hover,
+.page-header .issue-note a:hover {
+    text-decoration: underline;
+}
+
 .app-nav {
     display: flex;
     flex-wrap: wrap;
@@ -391,6 +413,10 @@ button {
     padding: 8px 10px;
 }
 
+.request-preview {
+    white-space: pre-line;
+}
+
 .connection-feedback:empty {
     display: none;
 }
@@ -626,6 +652,27 @@ button {
     padding: 0;
 }
 
+.markdown-body table {
+    width: 100%;
+    margin: 0 0 12px;
+    border-collapse: collapse;
+    font-size: 0.96em;
+}
+
+.markdown-body th,
+.markdown-body td {
+    border: 1px solid var(--line);
+    padding: 7px 9px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.markdown-body th {
+    background: var(--panel-soft);
+    color: var(--ink);
+    font-weight: 700;
+}
+
 .markdown-body blockquote {
     border-left: 3px solid rgba(15, 118, 110, 0.34);
     color: var(--muted);
@@ -650,6 +697,18 @@ button {
 .reasoning-block .markdown-body {
     margin-top: 8px;
     color: var(--muted);
+}
+
+.reasoning-block.is-live-preview:not(.is-user-open) .markdown-body {
+    max-height: 4.8em;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.reasoning-block.is-live-preview:not(.is-user-open) summary::after {
+    content: " · 实时预览";
+    color: var(--muted);
+    font-weight: 500;
 }
 
 .message.user .message-body {

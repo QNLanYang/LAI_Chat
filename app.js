@@ -24,6 +24,8 @@
         chatPresets: [],
         activeChatPreset: null,
         editingMessageId: "",
+        reasoningOpenState: {},
+        activeGeneratingMessageId: "",
         status: null
     };
 
@@ -438,6 +440,7 @@
                     message.reasoning = "";
                     changed = true;
                 }
+                message.reasoningComplete = Boolean(message.reasoningComplete);
             });
             return chat;
         });
@@ -600,6 +603,8 @@
 
     function renderMessages() {
         var chat = getActiveChat();
+        var shouldStickToBottom = isMessagesNearBottom();
+        rememberReasoningOpenState();
         elements.messages.textContent = "";
 
         if (!chat.messages.length) {
@@ -637,16 +642,105 @@
             elements.messages.appendChild(article);
         });
 
-        elements.messages.scrollTop = elements.messages.scrollHeight;
+        if (shouldStickToBottom) {
+            elements.messages.scrollTop = elements.messages.scrollHeight;
+        }
+    }
+
+    function isMessagesNearBottom() {
+        var distance = elements.messages.scrollHeight - elements.messages.scrollTop - elements.messages.clientHeight;
+        return distance < 80;
+    }
+
+    function rememberReasoningOpenState() {
+        elements.messages.querySelectorAll(".reasoning-block[data-reasoning-key]").forEach(function(block) {
+            var key = block.dataset.reasoningKey;
+            var current = state.reasoningOpenState[key] || {
+                open: false,
+                manual: false,
+                nearBottom: true
+            };
+            var body = block.querySelector(".markdown-body");
+            state.reasoningOpenState[key] = {
+                open: block.open,
+                manual: current.manual || block.dataset.manualOpen === "true",
+                nearBottom: body ? body.scrollHeight - body.scrollTop - body.clientHeight < 12 : true
+            };
+        });
     }
 
     function renderMessageBody(container, message) {
         var content = message.content || (message.role === "assistant" ? "..." : "");
         if (message.role === "assistant" && !message.error) {
-            markdown.renderAssistant(container, message.reasoning || "", content);
+            markdown.renderAssistant(container, message.reasoning || "", content, {
+                messageId: message.id
+            });
+            restoreReasoningBlocks(container, message);
             return;
         }
         container.textContent = content;
+    }
+
+    function restoreReasoningBlocks(container, message) {
+        container.querySelectorAll(".reasoning-block[data-reasoning-key]").forEach(function(block) {
+            var key = block.dataset.reasoningKey;
+            var current = state.reasoningOpenState[key] || null;
+            var isLive = state.isSending && state.activeGeneratingMessageId === message.id && !message.reasoningComplete;
+            var wasNearBottom = current ? current.nearBottom : true;
+            if (current && current.manual) {
+                block.open = current.open;
+                block.classList.add("is-user-open");
+                block.dataset.manualOpen = "true";
+            } else if (isLive) {
+                block.open = true;
+                block.classList.add("is-live-preview");
+                state.reasoningOpenState[key] = {
+                    open: true,
+                    manual: false,
+                    nearBottom: wasNearBottom
+                };
+            } else {
+                block.open = false;
+                state.reasoningOpenState[key] = {
+                    open: false,
+                    manual: false,
+                    nearBottom: true
+                };
+            }
+            scrollReasoningBlockToBottom(block, wasNearBottom);
+            block.querySelector("summary").addEventListener("click", function(event) {
+                if (block.classList.contains("is-live-preview") && !block.classList.contains("is-user-open")) {
+                    event.preventDefault();
+                    block.open = true;
+                    block.classList.remove("is-live-preview");
+                    block.classList.add("is-user-open");
+                    block.dataset.manualOpen = "true";
+                    state.reasoningOpenState[key] = {
+                        open: true,
+                        manual: true
+                    };
+                    return;
+                }
+                state.reasoningOpenState[key] = {
+                    open: !block.open,
+                    manual: true
+                };
+                block.dataset.manualOpen = "true";
+                block.classList.add("is-user-open");
+            });
+        });
+    }
+
+    function scrollReasoningBlockToBottom(block) {
+        if (!block.classList.contains("is-live-preview")) {
+            return;
+        }
+        var body = block.querySelector(".markdown-body");
+        if (body && (arguments.length < 2 || arguments[1])) {
+            requestAnimationFrame(function() {
+                body.scrollTop = body.scrollHeight;
+            });
+        }
     }
 
     function renderMessageImages(images) {
@@ -757,6 +851,7 @@
         }
         message.content = text;
         message.reasoning = "";
+        message.reasoningComplete = false;
         message.error = false;
         if (message.role === "user") {
             chat.messages = chat.messages.slice(0, index + 1);
@@ -1096,6 +1191,7 @@
         }
         state.abortController = new AbortController();
         state.isSending = true;
+        state.activeGeneratingMessageId = assistantMessage.id;
         setStatus(continuingAssistant ? "续写中" : "生成中", "ok");
         setFeedback("正在请求 " + completionRequestUrlFor(chat, {
             continuingAssistant: continuingAssistant
@@ -1148,6 +1244,7 @@
             chat.updatedAt = new Date().toISOString();
             state.abortController = null;
             state.isSending = false;
+            state.activeGeneratingMessageId = "";
             saveChats();
             renderAll();
             elements.promptInput.focus();
@@ -1345,6 +1442,7 @@
     function resetAssistantMessageForRetry(assistantMessage, options) {
         assistantMessage.error = false;
         assistantMessage.reasoning = "";
+        assistantMessage.reasoningComplete = false;
         assistantMessage.content = options && options.continuingAssistant ? options.continuationPrefix || "" : "";
     }
 
@@ -1377,11 +1475,46 @@
 
     function applyAssistantContent(assistantMessage, content, options) {
         var text = String(content || "");
+        if (text) {
+            markAssistantReasoningComplete(assistantMessage);
+        }
         if (!options || !options.continuingAssistant) {
             assistantMessage.content = text;
             return;
         }
         assistantMessage.content += text;
+    }
+
+    function appendAssistantContent(assistantMessage, text) {
+        if (!text) {
+            return;
+        }
+        markAssistantReasoningComplete(assistantMessage);
+        assistantMessage.content += text;
+    }
+
+    function markAssistantReasoningComplete(assistantMessage) {
+        if (!String(assistantMessage.reasoning || "").trim()) {
+            return;
+        }
+        assistantMessage.reasoningComplete = true;
+        collapseAutoReasoningBlocks(assistantMessage);
+    }
+
+    function collapseAutoReasoningBlocks(assistantMessage) {
+        Object.keys(state.reasoningOpenState).forEach(function(key) {
+            if (key.indexOf(assistantMessage.id + ":reasoning:") !== 0) {
+                return;
+            }
+            var current = state.reasoningOpenState[key];
+            if (current && !current.manual) {
+                state.reasoningOpenState[key] = {
+                    open: false,
+                    manual: false,
+                    nearBottom: true
+                };
+            }
+        });
     }
 
     function applyAssistantReasoning(assistantMessage, reasoning, options) {
@@ -1498,7 +1631,7 @@
                     scheduleMessageRender();
                 }
                 if (typeof delta.content === "string") {
-                    assistantMessage.content += delta.content;
+                    appendAssistantContent(assistantMessage, delta.content);
                     scheduleMessageRender();
                 }
             });
@@ -1604,7 +1737,7 @@
                     completedResponse = json.response;
                 }
                 if (json.type === "response.output_text.delta" && typeof json.delta === "string") {
-                    assistantMessage.content += json.delta;
+                    appendAssistantContent(assistantMessage, json.delta);
                     scheduleMessageRender();
                     return;
                 }
@@ -1674,7 +1807,7 @@
                     return;
                 }
                 if (json.type === "message.delta" && typeof json.content === "string") {
-                    assistantMessage.content += json.content;
+                    appendAssistantContent(assistantMessage, json.content);
                     scheduleMessageRender();
                     return;
                 }
@@ -1684,7 +1817,7 @@
                         assistantMessage.reasoning = extractLmStudioRestReasoning(json.result);
                     }
                     if (!assistantMessage.content.trim()) {
-                        assistantMessage.content = extractLmStudioRestText(json.result);
+                        applyAssistantContent(assistantMessage, extractLmStudioRestText(json.result), options);
                     }
                 }
                 if (json.type === "error" && json.error) {
@@ -1697,7 +1830,7 @@
         var data = await response.json();
         recordLmStudioRestSuccess(chat, data, options);
         assistantMessage.reasoning = extractLmStudioRestReasoning(data);
-        assistantMessage.content = extractLmStudioRestText(data);
+        applyAssistantContent(assistantMessage, extractLmStudioRestText(data), options);
     }
 
     async function requestLmStudioRestAsResponses(messages, assistantMessage, options) {
@@ -1744,7 +1877,7 @@
             await readJsonLines(response, function(json) {
                 var delta = json.message && json.message.content;
                 if (delta) {
-                    assistantMessage.content += delta;
+                    appendAssistantContent(assistantMessage, delta);
                     scheduleMessageRender();
                 }
             });
@@ -1783,18 +1916,18 @@
             await readSse(response, function(json) {
                 if (json.type === "content_block_delta" && json.delta) {
                     if (typeof json.delta.text === "string") {
-                        assistantMessage.content += json.delta.text;
+                        appendAssistantContent(assistantMessage, json.delta.text);
                         scheduleMessageRender();
                         return;
                     }
                     if (typeof json.delta.content === "string") {
-                        assistantMessage.content += json.delta.content;
+                        appendAssistantContent(assistantMessage, json.delta.content);
                         scheduleMessageRender();
                         return;
                     }
                 }
                 if (json.type === "message.delta" && typeof json.content === "string") {
-                    assistantMessage.content += json.content;
+                    appendAssistantContent(assistantMessage, json.content);
                     scheduleMessageRender();
                     return;
                 }
@@ -2281,12 +2414,12 @@
         var modelEndpoint = modelsEndpointFor(provider);
         if (showStatus) {
             state.isLoadingModels = true;
-            setButtonLoading(elements.loadModelsButton, true, "读取中", "读取模型");
+            setButtonLoading(elements.loadModelsButton, true, "测试中", "测试连接/刷新模型");
             updateSendState();
         }
         try {
             if (showStatus) {
-                setStatus("正在刷新模型", "ok");
+                setStatus("正在测试连接", "ok");
             }
             setFeedback("正在请求 " + modelEndpoint.url, "ok");
             var response = await fetch(modelEndpoint.url, {
@@ -2312,7 +2445,7 @@
         } finally {
             if (showStatus) {
                 state.isLoadingModels = false;
-                setButtonLoading(elements.loadModelsButton, false, "读取中", "读取模型");
+                setButtonLoading(elements.loadModelsButton, false, "测试中", "测试连接/刷新模型");
                 updateSendState();
             }
         }
@@ -2567,6 +2700,7 @@
             role: role,
             content: content,
             reasoning: "",
+            reasoningComplete: false,
             images: images || [],
             createdAt: new Date().toISOString()
         };

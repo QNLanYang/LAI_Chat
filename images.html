@@ -5,8 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <title>AI Images</title>
-    <meta name="description" content="本地优先的静态 AI 图片生成客户端">
+    <title>LAI Chat Images</title>
+    <meta name="description" content="LAI Chat 的本地优先静态 AI 图片生成页面">
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="styles.css">
     <script src="providers.js" defer></script>
@@ -20,7 +20,9 @@
         <aside class="sidebar" aria-label="图片生成设置">
             <header class="brand">
                 <div>
-                    <h1>AI Images</h1>
+                    <h1>LAI Chat Images</h1>
+                    <p class="beta-note">测试版，仍在开发中 · © QNLanYang</p>
+                    <p class="issue-note">欢迎在 GitHub 提交 issues · <a href="https://github.com/QNLanYang/LAI_Chat" target="_blank" rel="noreferrer">🔗Repo</a></p>
                     <p id="imageStatusText">未连接</p>
                 </div>
             </header>
@@ -53,6 +55,10 @@
                     <span>API Key（保存在当前预设）</span>
                     <input id="imageApiKeyInput" type="password" spellcheck="false" autocomplete="new-password">
                 </label>
+                <div class="row-actions">
+                    <button class="ghost-button" type="button" id="imageTestButton">测试连接/模型</button>
+                    <a class="ghost-button link-button" href="settings.html">管理预设</a>
+                </div>
                 <div class="request-preview" id="imageRequestPreview" aria-live="polite"></div>
             </section>
 

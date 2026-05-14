@@ -5,8 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <title>AI Chat</title>
-    <meta name="description" content="本地优先的静态 AI 聊天客户端">
+    <title>LAI Chat</title>
+    <meta name="description" content="LAI Chat，本地优先的静态 AI 聊天客户端">
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="styles.css">
     <script src="vendor/purify.min.js" defer></script>
@@ -23,7 +23,9 @@
         <aside class="sidebar" aria-label="会话和设置">
             <header class="brand">
                 <div>
-                    <h1>AI Chat</h1>
+                    <h1>LAI Chat</h1>
+                    <p class="beta-note">测试版，仍在开发中 · © QNLanYang</p>
+                    <p class="issue-note">欢迎在 GitHub 提交 issues · <a href="https://github.com/QNLanYang/LAI_Chat" target="_blank" rel="noreferrer">🔗Repo</a></p>
                     <p id="statusText">未连接</p>
                 </div>
             </header>
@@ -78,7 +80,7 @@
                     </div>
                 </label>
                 <div class="row-actions">
-                    <button class="ghost-button" type="button" id="loadModelsButton">刷新模型</button>
+                    <button class="ghost-button" type="button" id="loadModelsButton">测试连接/刷新模型</button>
                     <a class="ghost-button link-button" href="settings.html">管理预设</a>
                 </div>
                 <div class="connection-feedback" id="connectionFeedback" aria-live="polite"></div>

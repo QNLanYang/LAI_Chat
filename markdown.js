@@ -1,16 +1,19 @@
 (function(window) {
     "use strict";
 
-    function renderAssistant(container, reasoning, content) {
+    function renderAssistant(container, reasoning, content, options) {
+        options = options || {};
         var rendered = false;
         if (reasoning) {
-            container.appendChild(renderReasoningBlock(reasoning));
+            container.appendChild(renderReasoningBlock(reasoning, reasoningKey(options, 0)));
             rendered = true;
         }
         var parts = splitReasoningBlocks(content);
+        var offset = reasoning ? 1 : 0;
         parts.forEach(function(part) {
             if (part.type === "reasoning") {
-                container.appendChild(renderReasoningBlock(part.text));
+                container.appendChild(renderReasoningBlock(part.text, reasoningKey(options, offset)));
+                offset += 1;
                 rendered = true;
             } else if (part.text) {
                 var segment = document.createElement("div");
@@ -23,6 +26,10 @@
         if (!rendered) {
             container.textContent = "";
         }
+    }
+
+    function reasoningKey(options, index) {
+        return [options.messageId || "", "reasoning", index].join(":");
     }
 
     function splitReasoningBlocks(content) {
@@ -76,9 +83,12 @@
         return [{ type: "answer", text: normalized }];
     }
 
-    function renderReasoningBlock(text) {
+    function renderReasoningBlock(text, key) {
         var details = document.createElement("details");
         details.className = "reasoning-block";
+        if (key) {
+            details.dataset.reasoningKey = key;
+        }
         var summary = document.createElement("summary");
         summary.textContent = "推理过程";
         var body = document.createElement("div");

@@ -11,7 +11,8 @@
         activePreset: null,
         references: [],
         jobs: [],
-        isGenerating: false
+        isGenerating: false,
+        isTesting: false
     };
 
     document.addEventListener("DOMContentLoaded", init);
@@ -25,6 +26,7 @@
             modelInput: document.getElementById("imageModelInput"),
             apiKeyInput: document.getElementById("imageApiKeyInput"),
             requestPreview: document.getElementById("imageRequestPreview"),
+            testButton: document.getElementById("imageTestButton"),
             sizeSelect: document.getElementById("imageSizeSelect"),
             countInput: document.getElementById("imageCountInput"),
             providerLabel: document.getElementById("imageProviderLabel"),
@@ -96,6 +98,11 @@
             elements.promptInput.value = "";
             renderReferences();
         });
+        elements.testButton.addEventListener("click", function() {
+            testImageConnection().catch(function(error) {
+                setFeedback(explainError(error), "error");
+            });
+        });
         elements.form.addEventListener("submit", generateImage);
     }
 
@@ -165,7 +172,11 @@
     }
 
     function updateRequestPreview() {
-        elements.requestPreview.textContent = "图片 POST: " + config.imageRequestUrlFor(state.activePreset, state.references.length ? "edit" : "generation");
+        var lines = [
+            "测试 GET: " + config.imageRequestUrlFor(state.activePreset, "models"),
+            "图片 POST: " + config.imageRequestUrlFor(state.activePreset, state.references.length ? "edit" : "generation")
+        ];
+        elements.requestPreview.textContent = lines.join("\n");
     }
 
     function updateStatus() {
@@ -219,6 +230,41 @@
             state.isGenerating = false;
             updateGeneratingState();
             updateStatus();
+        }
+    }
+
+    async function testImageConnection() {
+        syncPresetFromForm();
+        if (!state.activePreset.endpoint) {
+            setFeedback("请先填写图片 API 地址。", "error");
+            return [];
+        }
+        state.isTesting = true;
+        updateGeneratingState();
+        var url = config.imageRequestUrlFor(state.activePreset, "models");
+        setFeedback("正在测试 " + url, "ok");
+        try {
+            var response = await fetch(url, {
+                headers: imageModelHeaders()
+            });
+            await ensureOk(response);
+            var data = await response.json();
+            var models = extractImageModelNames(data);
+            if (models.length) {
+                var current = state.activePreset.model || config.getImageProvider(state.activePreset.provider).defaultModel || "";
+                var matched = current && models.indexOf(current) !== -1;
+                setFeedback(matched ? "连接正常，当前模型在模型列表中。" : "连接正常，返回 " + models.length + " 个模型。", "ok");
+            } else {
+                setFeedback("连接正常，但未返回可识别的模型列表。", "warn");
+            }
+            updateStatus();
+            return models;
+        } catch (error) {
+            setFeedback(explainError(error), "error");
+            throw error;
+        } finally {
+            state.isTesting = false;
+            updateGeneratingState();
         }
     }
 
@@ -300,6 +346,33 @@
             headers.Authorization = "Bearer " + state.activePreset.apiKey;
         }
         return headers;
+    }
+
+    function imageModelHeaders() {
+        var provider = config.getImageProvider(state.activePreset.provider);
+        if (provider.mode === "geminiImages") {
+            return state.activePreset.apiKey ? {
+                "x-goog-api-key": state.activePreset.apiKey
+            } : {};
+        }
+        return imageHeaders({ bearer: true });
+    }
+
+    function extractImageModelNames(data) {
+        if (!data) {
+            return [];
+        }
+        if (Array.isArray(data.data)) {
+            return data.data.map(function(item) {
+                return typeof item === "string" ? item : item && (item.id || item.name);
+            }).filter(Boolean);
+        }
+        if (Array.isArray(data.models)) {
+            return data.models.map(function(item) {
+                return typeof item === "string" ? item : item && (item.id || item.name);
+            }).filter(Boolean);
+        }
+        return [];
     }
 
     function extractOpenAiImages(data) {
@@ -466,8 +539,10 @@
     function updateGeneratingState() {
         elements.generateButton.disabled = state.isGenerating;
         elements.generateButton.textContent = state.isGenerating ? "生成中" : "生成";
-        elements.providerSelect.disabled = state.isGenerating;
-        elements.presetSelect.disabled = state.isGenerating;
+        elements.testButton.disabled = state.isGenerating || state.isTesting;
+        elements.testButton.textContent = state.isTesting ? "测试中" : "测试连接/模型";
+        elements.providerSelect.disabled = state.isGenerating || state.isTesting;
+        elements.presetSelect.disabled = state.isGenerating || state.isTesting;
     }
 
     function setFeedback(text, tone) {

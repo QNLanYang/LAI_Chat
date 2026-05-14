@@ -57,6 +57,7 @@
             defaultAddress: "https://api.openai.com/v1/",
             defaultScheme: "https",
             versionPath: "/v1",
+            modelsPath: "/models",
             generationPath: "/images/generations",
             editPath: "/images/edits",
             defaultModel: "gpt-image-2"
@@ -66,6 +67,7 @@
             mode: "geminiImages",
             defaultAddress: "https://generativelanguage.googleapis.com/v1beta",
             defaultScheme: "https",
+            modelsPath: "/models",
             generationPath: "/models/{model}:generateContent",
             defaultModel: "gemini-2.5-flash-image"
         },
@@ -75,6 +77,7 @@
             defaultAddress: "",
             defaultScheme: "https",
             versionPath: "/v1",
+            modelsPath: "/models",
             generationPath: "/images/generations",
             editPath: "/images/edits",
             defaultModel: "gpt-image-2"
@@ -89,7 +92,7 @@
         reasoning: "auto",
         systemPrompt: "",
         temperature: 0.7,
-        maxTokens: 2048,
+        maxTokens: 0,
         topP: null,
         topK: null,
         minP: null,
@@ -296,6 +299,9 @@
 
     function imageRequestPathFor(preset, type) {
         var provider = getImageProvider(preset.provider);
+        if (type === "models") {
+            return provider.modelsPath || "/models";
+        }
         if (provider.mode === "geminiImages") {
             return provider.generationPath.replace("{model}", encodeURIComponent(preset.model || provider.defaultModel));
         }
