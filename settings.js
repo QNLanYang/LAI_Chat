@@ -25,6 +25,8 @@
             presetModelInput: document.getElementById("presetModelInput"),
             presetOpenAiApiField: document.getElementById("presetOpenAiApiField"),
             presetOpenAiApiSelect: document.getElementById("presetOpenAiApiSelect"),
+            presetResponseImageGenerationField: document.getElementById("presetResponseImageGenerationField"),
+            presetResponseImageGenerationCheckbox: document.getElementById("presetResponseImageGenerationCheckbox"),
             presetApiKeyInput: document.getElementById("presetApiKeyInput"),
             presetPreview: document.getElementById("presetPreview"),
             settingsFeedback: document.getElementById("settingsFeedback")
@@ -74,6 +76,7 @@
             elements.presetEndpointInput,
             elements.presetModelInput,
             elements.presetOpenAiApiSelect,
+            elements.presetResponseImageGenerationCheckbox,
             elements.presetApiKeyInput
         ].forEach(function(input) {
             input.addEventListener("input", saveCurrent);
@@ -134,6 +137,7 @@
         elements.presetEndpointInput.value = state.active.endpoint;
         elements.presetModelInput.value = state.active.model || "";
         elements.presetOpenAiApiSelect.value = state.active.openaiApi || "chat";
+        elements.presetResponseImageGenerationCheckbox.checked = Boolean(state.active.responseImageGeneration);
         elements.presetApiKeyInput.value = state.active.apiKey || "";
         updateOpenAiApiVisibility(state.active.provider);
         elements.presetEndpointInput.placeholder = state.kind === "image" ?
@@ -148,12 +152,23 @@
         }
         var provider = elements.presetProviderSelect.value;
         var providerInfo = state.kind === "image" ? config.getImageProvider(provider) : config.getProvider(provider);
+        var openaiApi = providerInfo.mode === "openai" && providerInfo.supportsResponses === false ?
+            "chat" :
+            elements.presetOpenAiApiSelect.value;
+        var responseImageGeneration = Boolean(
+            state.kind === "chat" &&
+            providerInfo.mode === "openai" &&
+            providerInfo.supportsResponses !== false &&
+            openaiApi === "responses" &&
+            elements.presetResponseImageGenerationCheckbox.checked
+        );
         var next = Object.assign({}, state.active, {
             name: elements.presetNameInput.value.trim() || providerInfo.label,
             provider: provider,
             endpoint: elements.presetEndpointInput.value.trim(),
             model: elements.presetModelInput.value.trim(),
-            openaiApi: elements.presetOpenAiApiSelect.value,
+            openaiApi: openaiApi,
+            responseImageGeneration: responseImageGeneration,
             apiKey: elements.presetApiKeyInput.value.trim()
         });
         if (!next.endpoint && providerInfo.defaultAddress) {
@@ -202,6 +217,17 @@
     }
 
     function updateOpenAiApiVisibility(provider) {
-        elements.presetOpenAiApiField.hidden = !(state.kind === "chat" && provider === "openai");
+        var providerInfo = config.getProvider(provider);
+        elements.presetOpenAiApiField.hidden = !(
+            state.kind === "chat" &&
+            providerInfo.mode === "openai" &&
+            providerInfo.supportsResponses !== false
+        );
+        elements.presetResponseImageGenerationField.hidden = !(
+            state.kind === "chat" &&
+            providerInfo.mode === "openai" &&
+            providerInfo.supportsResponses !== false &&
+            elements.presetOpenAiApiSelect.value === "responses"
+        );
     }
 })();

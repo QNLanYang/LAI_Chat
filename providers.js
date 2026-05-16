@@ -37,7 +37,18 @@
             versionPath: "/v1",
             modelsPath: "/models",
             chatPath: "/chat/completions",
-            responsesPath: "/responses"
+            responsesPath: "/responses",
+            supportsResponses: true
+        },
+        gemini: {
+            label: "Gemini OpenAI-compatible",
+            mode: "openai",
+            defaultAddress: "https://generativelanguage.googleapis.com/v1beta/openai/",
+            defaultScheme: "https",
+            modelsPath: "/models",
+            chatPath: "/chat/completions",
+            responsesPath: "",
+            supportsResponses: false
         },
         anthropic: {
             label: "Anthropic-compatible",
@@ -60,7 +71,8 @@
             modelsPath: "/models",
             generationPath: "/images/generations",
             editPath: "/images/edits",
-            defaultModel: "gpt-image-2"
+            defaultModel: "gpt-image-2",
+            imageSizeMode: "model"
         },
         geminiImages: {
             label: "Gemini / Nano Banana",
@@ -69,7 +81,8 @@
             defaultScheme: "https",
             modelsPath: "/models",
             generationPath: "/models/{model}:generateContent",
-            defaultModel: "gemini-2.5-flash-image"
+            defaultModel: "gemini-2.5-flash-image",
+            imageSizeMode: "prompt"
         },
         customOpenAiImages: {
             label: "OpenAI Images-compatible",
@@ -80,7 +93,8 @@
             modelsPath: "/models",
             generationPath: "/images/generations",
             editPath: "/images/edits",
-            defaultModel: "gpt-image-2"
+            defaultModel: "gpt-image-2",
+            imageSizeMode: "model"
         }
     };
 
@@ -99,6 +113,7 @@
         repeatPenalty: null,
         presencePenalty: null,
         frequencyPenalty: null,
+        responseImageGeneration: false,
         stream: true
     };
 
@@ -122,6 +137,16 @@
             apiKey: "",
             model: "",
             openaiApi: "chat"
+        },
+        {
+            id: "chat-gemini-openai-compatible",
+            name: "Gemini OpenAI-compatible",
+            kind: "chat",
+            provider: "gemini",
+            endpoint: PROVIDERS.gemini.defaultAddress,
+            apiKey: "",
+            model: "",
+            openaiApi: "chat"
         }
     ];
 
@@ -133,7 +158,9 @@
             provider: "openaiImages",
             endpoint: IMAGE_PROVIDERS.openaiImages.defaultAddress,
             apiKey: "",
-            model: IMAGE_PROVIDERS.openaiImages.defaultModel
+            model: IMAGE_PROVIDERS.openaiImages.defaultModel,
+            resolution: "720p",
+            aspect: "1:1"
         },
         {
             id: "image-gemini",
@@ -142,7 +169,9 @@
             provider: "geminiImages",
             endpoint: IMAGE_PROVIDERS.geminiImages.defaultAddress,
             apiKey: "",
-            model: IMAGE_PROVIDERS.geminiImages.defaultModel
+            model: IMAGE_PROVIDERS.geminiImages.defaultModel,
+            resolution: "720p",
+            aspect: "1:1"
         }
     ];
 
@@ -286,7 +315,7 @@
         if (type === "models") {
             return provider.modelsPath;
         }
-        if (provider.mode === "openai" && settings.openaiApi === "responses") {
+        if (provider.mode === "openai" && settings.openaiApi === "responses" && provider.supportsResponses !== false) {
             return provider.responsesPath;
         }
         return provider.chatPath;

@@ -7,7 +7,9 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <title>LAI Chat Images</title>
     <meta name="description" content="LAI Chat 的本地优先静态 AI 图片生成页面">
-    <link rel="icon" href="data:,">
+    <link rel="icon" href="assets/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="assets/favicon-32.png" sizes="32x32">
+    <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
     <link rel="stylesheet" href="styles.css">
     <script src="providers.js" defer></script>
     <script src="theme.js" defer></script>
@@ -20,11 +22,16 @@
         <aside class="sidebar" aria-label="图片生成设置">
             <header class="brand">
                 <div>
-                    <h1>LAI Chat Images</h1>
+                    <h1 class="brand-title">
+                        <img class="brand-logo is-light" src="assets/lai-chat-wordmark-light.png" alt="LAI Chat">
+                        <img class="brand-logo is-dark" src="assets/lai-chat-wordmark-dark.png" alt="">
+                        <span>LAI Chat Images</span>
+                    </h1>
                     <p class="beta-note">测试版，仍在开发中 · © QNLanYang</p>
                     <p class="issue-note">欢迎在 GitHub 提交 issues · <a href="https://github.com/QNLanYang/LAI_Chat" target="_blank" rel="noreferrer">🔗Repo</a></p>
                     <p id="imageStatusText">未连接</p>
                 </div>
+                <button class="ghost-button sidebar-close" type="button" id="imageSidebarCloseButton" aria-label="关闭菜单">关闭</button>
             </header>
 
             <nav class="app-nav" aria-label="应用导航">
@@ -39,19 +46,23 @@
                     <span>预设</span>
                     <select id="imagePresetSelect"></select>
                 </label>
-                <label>
+                <label hidden>
                     <span>Provider</span>
                     <select id="imageProviderSelect"></select>
                 </label>
-                <label>
+                <label hidden>
                     <span>地址</span>
                     <input id="imageEndpointInput" type="text" inputmode="url" spellcheck="false" autocomplete="off">
                 </label>
                 <label>
                     <span>模型</span>
-                    <input id="imageModelInput" spellcheck="false" autocomplete="off">
+                    <div class="model-picker" id="imageModelPicker">
+                        <input id="imageModelInput" spellcheck="false" autocomplete="off" placeholder="选择或输入模型名">
+                        <button class="model-menu-button" type="button" id="imageModelMenuButton" aria-label="展开模型列表" aria-expanded="false">▾</button>
+                        <div class="model-menu" id="imageModelMenu" hidden></div>
+                    </div>
                 </label>
-                <label>
+                <label hidden>
                     <span>API Key（保存在当前预设）</span>
                     <input id="imageApiKeyInput" type="password" spellcheck="false" autocomplete="new-password">
                 </label>
@@ -59,26 +70,46 @@
                     <button class="ghost-button" type="button" id="imageTestButton">测试连接/模型</button>
                     <a class="ghost-button link-button" href="settings.html">管理预设</a>
                 </div>
-                <div class="request-preview" id="imageRequestPreview" aria-live="polite"></div>
+                <div class="request-preview" id="imageRequestPreview" aria-live="polite" hidden></div>
             </section>
 
             <section class="side-section settings">
                 <h2>参数</h2>
                 <label>
-                    <span>尺寸</span>
-                    <select id="imageSizeSelect">
-                        <option value="1024x1024">1024 x 1024</option>
-                        <option value="1536x1024">1536 x 1024</option>
-                        <option value="1024x1536">1024 x 1536</option>
-                        <option value="auto">auto</option>
+                    <span>分辨率</span>
+                    <select id="imageResolutionSelect">
+                        <option value="720p">720P</option>
+                        <option value="1080p">1080P</option>
+                        <option value="2k">2K</option>
+                        <option value="4k">4K</option>
                     </select>
                 </label>
+                <label>
+                    <span>比例</span>
+                    <select id="imageAspectSelect">
+                        <optgroup label="方形">
+                            <option value="1:1">1:1</option>
+                        </optgroup>
+                        <optgroup label="竖屏">
+                            <option value="3:4">3:4</option>
+                            <option value="2:3">2:3</option>
+                            <option value="9:16">9:16</option>
+                        </optgroup>
+                        <optgroup label="横屏">
+                            <option value="4:3">4:3</option>
+                            <option value="3:2">3:2</option>
+                            <option value="16:9">16:9</option>
+                        </optgroup>
+                    </select>
+                </label>
+                <div class="size-preview" id="imageSizePreview" aria-live="polite"></div>
                 <label>
                     <span>数量</span>
                     <input id="imageCountInput" type="number" min="1" max="4" step="1" value="1">
                 </label>
             </section>
         </aside>
+        <button class="sidebar-scrim" type="button" id="imageSidebarScrim" aria-label="关闭菜单" hidden></button>
 
         <main class="image-panel" aria-label="图片生成">
             <header class="chat-header">
@@ -86,7 +117,10 @@
                     <p class="eyebrow" id="imageProviderLabel">OpenAI Images</p>
                     <h2>图片生成</h2>
                 </div>
-                <div class="status-pill" id="imageStatusPill">Local first</div>
+                <div class="chat-header-actions">
+                    <button class="ghost-button mobile-menu-button" type="button" id="imageSidebarOpenButton" aria-label="打开菜单">菜单</button>
+                    <div class="status-pill" id="imageStatusPill">Local first</div>
+                </div>
             </header>
 
             <section class="image-workbench">

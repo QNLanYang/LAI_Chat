@@ -1,6 +1,7 @@
 # LAI Chat
 
-LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户端。项目由 QNLanYang / 全能岚漾 开发，目前处于测试版，计划先部署到 GitHub Pages，并在 `ai.qnly.top` 提供在线入口。~~所以每次点进去可能都会不一样？~~
+LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户端。项目由 QNLanYang / 全能岚漾 开发，目前处于测试版，计划先部署到 GitHub Pages，并在 `ai.qnly.top` 提供在线入口。
+~~所以每次点进去可能都会不一样？~~
 
 ## 项目定位
 
@@ -12,22 +13,27 @@ LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户�
 - API Key 也只保存在浏览器本地的 provider 预设里，不会上传到任何项目服务器。~~（因为纯静态页面根本没有服务器这说）~~
 - 所有请求都由用户浏览器直接发往用户配置的 API 端点。
 
+项目当前使用 GPT-image-2 生成的字标作为页面品牌标识，并提供 favicon / touch icon 资源~~（有点粗糙，以后会打磨一下）~~。
+
 项目目前还在早期开发阶段，不承诺稳定 API 或向前兼容。欢迎通过 GitHub issues 反馈问题，也欢迎提交 PR。
 
-~~如果你没有API只是想玩一下那我在 api.qnly.top 有一个小参数量化降智0.8B模型仅供体验。~~
+~~*如果你没有API只是想玩的话那我在 api.qnly.top 有一个OpenAI兼容端点，大部分时间只提供0.8B小参数量化降智模型**仅供体验***~~
+~~*偶尔可能会上线别的大模型，但请注意一次只能加载一个模型，加载需要时间，**不要频繁切换***~~
 
 ## 当前功能
 
 - 多会话聊天、会话导出和清空。
 - Providers 预设管理，可保存多个聊天和图片 API 配置，会根据地址自动匹配是否启用 https。
-- 支持 LM Studio REST v1、Ollama、OpenAI-compatible、Anthropic-compatible。
+- 支持 LM Studio REST v1、Ollama、OpenAI-compatible、Gemini OpenAI-compatible、Anthropic-compatible。
 - 支持 OpenAI Chat Completions 和 Responses 两种兼容接口。
+- 支持 Responses 内置 `image_generation` 工具，可在支持的接口中通过聊天触发图片生成。
 - 支持模型列表读取、连接测试、流式输出和停止生成。
 - 支持 Markdown 渲染、推理块展示和折叠。
 - 支持图片输入，包含文件选择和粘贴图片。
 - 支持编辑、删除、重新生成和从某条消息后继续。
-- 支持基础图片生成页面，包括 OpenAI Images-compatible 和 Gemini / Nano Banana 类接口。
+- 支持基础图片生成页面，包括 OpenAI Images-compatible 和 Gemini / Nano Banana 类接口，并提供模型列表、任务历史、分辨率档位与画幅比例预设。
 - 支持浅色 / 深色模式。
+- 支持移动端侧边栏布局和自定义滚动条。
 
 ## 实现方式
 
@@ -56,15 +62,16 @@ LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户�
 7. 选择模型或手动输入模型名，然后开始对话。
 
 图片生成页面使用方式类似：进入“图片”，选择图片 Provider 预设，填写地址、模型和 API Key，点击“测试连接/模型”，再输入提示词生成图片。
+分辨率档位是目标参考值；`gpt-image-2` 会按当前分辨率和比例发送精确像素尺寸，对于只接受固定 `size` 参数的旧模型或兼容接口，LAI Chat 会自动映射到接口支持的请求尺寸，并把目标比例和像素写入提示词。
 
 ## 后续计划
 
-- 完善图片生成 API 支持，覆盖 GPT-image、Nano Banana、OpenAI Images-compatible 等更多兼容实现。
-- 改进图片页面的模型列表读取、参数面板和任务历史。
+- 完善图片生成高级参数，覆盖质量、背景、输出格式、压缩、流式预览等 OpenAI Images 标准选项。
+- 增加面向第三方兼容图片 API 的参数映射和能力检测。
 - 增加更完整的 provider 能力检测和错误 fallback。
 - 优化长上下文会话管理、消息分支和会话搜索。
 - 增加导入/导出 provider 预设。
-- 优化移动端和窄屏布局。
+- 继续优化移动端和窄屏下的复杂对话、图片结果浏览体验。
 - 根据 GitHub issues 和 PR 反馈调整产品形态。
 
 ## 安全说明
@@ -80,4 +87,5 @@ LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户�
 - `LAI` 还来自 Lanyang / 岚漾，表示这是 QNLanYang / 全能岚漾 开发和维护的 AI 客户端。
 
 所以 `LAI Chat` 不是单纯换个名字，而是把“来”、`Local_AI` 和 Lanyang 三层含义合在一起。
+
 ~~我去我怎么这么牛~~

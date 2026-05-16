@@ -34,6 +34,10 @@
     function init() {
         elements = {
             statusText: document.getElementById("statusText"),
+            sidebar: document.querySelector(".sidebar"),
+            sidebarOpenButton: document.getElementById("sidebarOpenButton"),
+            sidebarCloseButton: document.getElementById("sidebarCloseButton"),
+            sidebarScrim: document.getElementById("sidebarScrim"),
             chatList: document.getElementById("chatList"),
             newChatButton: document.getElementById("newChatButton"),
             chatPresetSelect: document.getElementById("chatPresetSelect"),
@@ -66,6 +70,8 @@
             frequencyPenaltyInput: document.getElementById("frequencyPenaltyInput"),
             reasoningSelect: document.getElementById("reasoningSelect"),
             streamCheckbox: document.getElementById("streamCheckbox"),
+            responseImageGenerationField: document.getElementById("responseImageGenerationField"),
+            responseImageGenerationCheckbox: document.getElementById("responseImageGenerationCheckbox"),
             exportButton: document.getElementById("exportButton"),
             clearButton: document.getElementById("clearButton"),
             providerLabel: document.getElementById("providerLabel"),
@@ -106,6 +112,7 @@
         elements.frequencyPenaltyInput.value = optionalNumberValue(state.settings.frequencyPenalty);
         elements.reasoningSelect.value = state.settings.reasoning;
         elements.streamCheckbox.checked = state.settings.stream;
+        elements.responseImageGenerationCheckbox.checked = Boolean(state.settings.responseImageGeneration);
         renderChatPresetSelect();
         elements.apiKeyInput.value = loadApiKey();
         state.endpointWasAutoFilled = config.isDefaultAddress(state.settings.provider, state.settings.endpoint);
@@ -120,8 +127,27 @@
     }
 
     function bindEvents() {
+        elements.sidebarOpenButton.addEventListener("click", function() {
+            setSidebarOpen(true);
+        });
+
+        elements.sidebarCloseButton.addEventListener("click", function() {
+            setSidebarOpen(false);
+        });
+
+        elements.sidebarScrim.addEventListener("click", function() {
+            setSidebarOpen(false);
+        });
+
+        document.addEventListener("keydown", function(event) {
+            if (event.key === "Escape") {
+                setSidebarOpen(false);
+            }
+        });
+
         elements.newChatButton.addEventListener("click", function() {
             createChat(true);
+            setSidebarOpen(false);
         });
 
         elements.chatPresetSelect.addEventListener("change", function() {
@@ -228,6 +254,7 @@
 
         elements.endpointInput.addEventListener("blur", normalizeEndpointInput);
         elements.streamCheckbox.addEventListener("change", syncSettingsFromForm);
+        elements.responseImageGenerationCheckbox.addEventListener("change", syncSettingsFromForm);
 
         elements.apiKeyInput.addEventListener("input", function() {
             var apiKey = elements.apiKeyInput.value.trim();
@@ -303,6 +330,7 @@
         state.settings.frequencyPenalty = parseOptionalNumber(elements.frequencyPenaltyInput.value, -2, 2);
         state.settings.reasoning = elements.reasoningSelect.value;
         state.settings.stream = elements.streamCheckbox.checked;
+        state.settings.responseImageGeneration = Boolean(elements.responseImageGenerationCheckbox.checked);
         if (shouldSaveActiveChatPreset()) {
             saveActiveChatPresetFromCurrent();
         }
@@ -342,6 +370,7 @@
         elements.frequencyPenaltyInput.value = optionalNumberValue(state.settings.frequencyPenalty);
         elements.reasoningSelect.value = state.settings.reasoning || defaultSettings.reasoning;
         elements.streamCheckbox.checked = Boolean(state.settings.stream);
+        elements.responseImageGenerationCheckbox.checked = Boolean(state.settings.responseImageGeneration);
         elements.apiKeyInput.value = loadApiKey();
     }
 
@@ -385,6 +414,7 @@
         settings.repeatPenalty = normalizeOptionalNumber(settings.repeatPenalty, 0, 4);
         settings.presencePenalty = normalizeOptionalNumber(settings.presencePenalty, -2, 2);
         settings.frequencyPenalty = normalizeOptionalNumber(settings.frequencyPenalty, -2, 2);
+        settings.responseImageGeneration = Boolean(settings.responseImageGeneration);
     }
 
     function loadApiKey() {
@@ -436,6 +466,12 @@
                     message.images = [];
                     changed = true;
                 }
+                message.images.forEach(function(image) {
+                    if (image && image.partial) {
+                        image.partial = false;
+                        changed = true;
+                    }
+                });
                 if (typeof message.reasoning !== "string") {
                     message.reasoning = "";
                     changed = true;
@@ -522,7 +558,8 @@
             endpoint: state.settings.endpoint,
             apiKey: elements.apiKeyInput.value.trim(),
             model: state.settings.model,
-            openaiApi: state.settings.openaiApi
+            openaiApi: state.settings.openaiApi,
+            responseImageGeneration: Boolean(state.settings.responseImageGeneration)
         });
         presetsApi.upsertPreset(next);
         state.activeChatPreset = next;
@@ -537,6 +574,7 @@
             state.activeChatPreset.endpoint !== state.settings.endpoint ||
             state.activeChatPreset.model !== state.settings.model ||
             state.activeChatPreset.openaiApi !== state.settings.openaiApi ||
+            Boolean(state.activeChatPreset.responseImageGeneration) !== Boolean(state.settings.responseImageGeneration) ||
             state.activeChatPreset.apiKey !== elements.apiKeyInput.value.trim();
     }
 
@@ -552,6 +590,7 @@
             button.addEventListener("click", function() {
                 state.activeChatId = chat.id;
                 renderAll();
+                setSidebarOpen(false);
             });
 
             var title = document.createElement("strong");
@@ -599,6 +638,12 @@
         }
         saveChats();
         renderAll();
+    }
+
+    function setSidebarOpen(open) {
+        document.body.classList.toggle("is-sidebar-open", Boolean(open));
+        elements.sidebarOpenButton.setAttribute("aria-expanded", open ? "true" : "false");
+        elements.sidebarScrim.hidden = !open;
     }
 
     function renderMessages() {
@@ -667,7 +712,8 @@
     }
 
     function renderMessageBody(container, message) {
-        var content = message.content || (message.role === "assistant" ? "..." : "");
+        var hasImages = Array.isArray(message.images) && message.images.length;
+        var content = message.content || (message.role === "assistant" && !hasImages ? "..." : "");
         if (message.role === "assistant" && !message.error) {
             markdown.renderAssistant(container, message.reasoning || "", content, {
                 messageId: message.id
@@ -731,6 +777,10 @@
             var img = document.createElement("img");
             img.src = image.dataUrl;
             img.alt = image.name || "图片";
+            if (image.partial) {
+                img.className = "is-partial";
+                img.title = "生成预览";
+            }
             wrap.appendChild(img);
         });
         return wrap;
@@ -981,10 +1031,15 @@
     }
 
     function updateProviderControls() {
-        var isOpenAi = state.settings.provider === "openai";
+        var provider = config.getProvider(state.settings.provider);
+        var isOpenAi = provider.mode === "openai" && provider.supportsResponses !== false;
         elements.openaiApiField.hidden = true;
         elements.openaiApiField.setAttribute("aria-hidden", "true");
         elements.openaiApiSelect.disabled = !isOpenAi || state.isSending;
+        if (provider.mode === "openai" && provider.supportsResponses === false) {
+            state.settings.openaiApi = "chat";
+            state.settings.responseImageGeneration = false;
+        }
         elements.openaiApiSelect.value = state.settings.openaiApi;
         elements.endpointInput.placeholder = config.addressPlaceholderFor(state.settings.provider);
         updateParameterVisibility();
@@ -999,12 +1054,21 @@
         setFieldVisible(elements.repeatPenaltyField, capabilities.repeatPenalty);
         setFieldVisible(elements.presencePenaltyField, capabilities.presencePenalty);
         setFieldVisible(elements.frequencyPenaltyField, capabilities.frequencyPenalty);
+        setFieldVisible(elements.responseImageGenerationField, supportsResponsesImageGeneration());
         elements.topPInput.disabled = state.isSending || !capabilities.topP;
         elements.topKInput.disabled = state.isSending || !capabilities.topK;
         elements.minPInput.disabled = state.isSending || !capabilities.minP;
         elements.repeatPenaltyInput.disabled = state.isSending || !capabilities.repeatPenalty;
         elements.presencePenaltyInput.disabled = state.isSending || !capabilities.presencePenalty;
         elements.frequencyPenaltyInput.disabled = state.isSending || !capabilities.frequencyPenalty;
+        elements.responseImageGenerationCheckbox.disabled = state.isSending || !supportsResponsesImageGeneration();
+    }
+
+    function supportsResponsesImageGeneration() {
+        var provider = config.getProvider(state.settings.provider);
+        return provider.mode === "openai" &&
+            provider.supportsResponses !== false &&
+            state.settings.openaiApi === "responses";
     }
 
     function parameterCapabilitiesFor(provider) {
@@ -1112,6 +1176,7 @@
         elements.maxTokensInput.disabled = state.isSending;
         elements.reasoningSelect.disabled = state.isSending;
         elements.streamCheckbox.disabled = state.isSending;
+        elements.responseImageGenerationCheckbox.disabled = state.isSending || !supportsResponsesImageGeneration();
         elements.apiKeyInput.disabled = state.isSending;
         elements.attachButton.disabled = state.isSending;
         elements.loadModelsButton.disabled = state.isSending || state.isLoadingModels;
@@ -1310,6 +1375,13 @@
             parts.push("Continue the final assistant message exactly from where it ended. Do not repeat existing text, do not add a new user turn, and do not explain that you are continuing.");
         }
         return parts.join("\n\n");
+    }
+
+    function responseImageGenerationEnabled(options) {
+        if (options && options.responseImageGeneration !== undefined) {
+            return Boolean(options.responseImageGeneration);
+        }
+        return Boolean(state.settings.responseImageGeneration) && supportsResponsesImageGeneration();
     }
 
     function markChatHistoryDirty(chat) {
@@ -1522,10 +1594,65 @@
     function hasGeneratedAssistantContent(assistantMessage, prefix) {
         var current = String(assistantMessage.content || "");
         var start = String(prefix || "");
+        if (Array.isArray(assistantMessage.images) && assistantMessage.images.length) {
+            return true;
+        }
         if (!start) {
             return Boolean(current.trim());
         }
         return current.length > start.length;
+    }
+
+    function applyAssistantImages(assistantMessage, images, options) {
+        var incoming = normalizeGeneratedImages(images);
+        if (!incoming.length) {
+            return;
+        }
+        options = options || {};
+        if (!Array.isArray(assistantMessage.images)) {
+            assistantMessage.images = [];
+        }
+        if (options.replacePreviews) {
+            assistantMessage.images = assistantMessage.images.filter(function(image) {
+                return !image.partial;
+            });
+        }
+        incoming.forEach(function(image) {
+            var sameData = assistantMessage.images.some(function(existing) {
+                return existing.dataUrl === image.dataUrl;
+            });
+            if (!sameData) {
+                assistantMessage.images.push(image);
+            }
+        });
+    }
+
+    function applyOpenAiResponseImagePreview(assistantMessage, event) {
+        var b64 = event && (event.partial_image_b64 || event.b64_json || event.result);
+        if (!b64) {
+            return;
+        }
+        var index = event.partial_image_index || 0;
+        var image = {
+            name: "Responses 图片预览 " + (index + 1),
+            type: "image/png",
+            dataUrl: base64ImageDataUrl(b64, "image/png"),
+            partial: true
+        };
+        if (!Array.isArray(assistantMessage.images)) {
+            assistantMessage.images = [];
+        }
+        var existing = assistantMessage.images.find(function(item) {
+            return item.partial && item.previewIndex === index;
+        });
+        image.previewIndex = index;
+        if (existing) {
+            existing.dataUrl = image.dataUrl;
+            existing.name = image.name;
+            existing.type = image.type;
+            return;
+        }
+        assistantMessage.images.push(image);
     }
 
     function responsesSignatureFor(responseUrl, responseTransport) {
@@ -1533,7 +1660,8 @@
             responseTransport,
             responseUrl,
             state.settings.model || "",
-            state.settings.systemPrompt.trim()
+            state.settings.systemPrompt.trim(),
+            responseImageGenerationEnabled() ? "image_generation:on" : "image_generation:off"
         ].join("\n");
     }
 
@@ -1632,6 +1760,7 @@
         var responseState = options.chat ? ensureResponsesState(options.chat) : null;
         var responseSignature = responsesSignatureFor(responseUrl, responseTransport);
         var usePreviousResponse = shouldUsePreviousOpenAiResponse(responseState, responseSignature, options);
+        var useImageGeneration = responseImageGenerationEnabled(options);
         await sendOpenAiResponsesRequest({
             messages: messages,
             assistantMessage: assistantMessage,
@@ -1639,7 +1768,8 @@
             responseUrl: responseUrl,
             responseTransport: responseTransport,
             responseSignature: responseSignature,
-            usePreviousResponse: usePreviousResponse
+            usePreviousResponse: usePreviousResponse,
+            useImageGeneration: useImageGeneration
         });
     }
 
@@ -1680,6 +1810,7 @@
         var responseTransport = request.responseTransport;
         var responseSignature = request.responseSignature;
         var usePreviousResponse = request.usePreviousResponse;
+        var useImageGeneration = Boolean(request.useImageGeneration);
         var responseState = options.chat ? ensureResponsesState(options.chat) : null;
         var responseMessages = messages.filter(function(message) {
             return message.role !== "system";
@@ -1695,6 +1826,11 @@
         };
         addMaxTokens(body, "max_output_tokens");
         addSamplerParams(body, "openaiResponses");
+        if (useImageGeneration) {
+            body.tools = [{
+                type: "image_generation"
+            }];
+        }
         if (usePreviousResponse) {
             body.previous_response_id = responseState.responseId;
         }
@@ -1727,6 +1863,16 @@
                     scheduleMessageRender();
                     return;
                 }
+                if (json.type === "response.image_generation_call.partial_image") {
+                    applyOpenAiResponseImagePreview(assistantMessage, json);
+                    scheduleMessageRender();
+                    return;
+                }
+                if (json.type === "response.image_generation_call.completed") {
+                    applyAssistantImages(assistantMessage, [json], { replacePreviews: true });
+                    scheduleMessageRender();
+                    return;
+                }
                 if (json.type === "response.completed" && json.response) {
                     completedResponse = json.response;
                     if (!String(assistantMessage.reasoning || "").trim()) {
@@ -1735,6 +1881,7 @@
                     if (!hasGeneratedAssistantContent(assistantMessage, options.continuationPrefix || "")) {
                         applyAssistantContent(assistantMessage, extractOpenAiResponseText(json.response), options);
                     }
+                    applyAssistantImages(assistantMessage, extractOpenAiResponseImages(json.response), { replacePreviews: true });
                 }
                 if (json.type === "error" && json.error) {
                     throw new Error(json.error.message || "OpenAI Responses stream error");
@@ -1747,6 +1894,7 @@
         var data = await response.json();
         applyAssistantReasoning(assistantMessage, extractOpenAiResponseReasoning(data), options);
         applyAssistantContent(assistantMessage, extractOpenAiResponseText(data), options);
+        applyAssistantImages(assistantMessage, extractOpenAiResponseImages(data), { replacePreviews: true });
         recordOpenAiResponsesSuccess(options, responseSignature, responseTransport, data);
     }
 
@@ -2288,6 +2436,72 @@
         return data.output.map(function(item) {
             return markdown.reasoningTextFromObject(item);
         }).join("").trim();
+    }
+
+    function extractOpenAiResponseImages(data) {
+        if (!data || !Array.isArray(data.output)) {
+            return [];
+        }
+        var images = [];
+        data.output.forEach(function(item, index) {
+            if (!item || item.type !== "image_generation_call") {
+                return;
+            }
+            var b64 = item.result || item.b64_json || item.image_b64 || "";
+            if (!b64) {
+                return;
+            }
+            images.push({
+                name: "Responses 生成图片 " + (index + 1),
+                type: outputImageType(item),
+                dataUrl: base64ImageDataUrl(b64, outputImageType(item))
+            });
+        });
+        return images;
+    }
+
+    function outputImageType(item) {
+        var format = String(item.output_format || item.format || "png").toLowerCase();
+        if (format === "jpg") {
+            format = "jpeg";
+        }
+        return "image/" + (["png", "jpeg", "webp"].indexOf(format) !== -1 ? format : "png");
+    }
+
+    function normalizeGeneratedImages(images) {
+        return (images || []).map(function(image, index) {
+            if (!image) {
+                return null;
+            }
+            if (typeof image === "string") {
+                return {
+                    name: "Responses 生成图片 " + (index + 1),
+                    type: "image/png",
+                    dataUrl: base64ImageDataUrl(image, "image/png")
+                };
+            }
+            var type = image.type || "image/png";
+            return {
+                name: image.name || "Responses 生成图片 " + (index + 1),
+                type: type,
+                dataUrl: image.dataUrl || base64ImageDataUrl(image.b64_json || image.result || "", type),
+                partial: Boolean(image.partial),
+                previewIndex: image.previewIndex
+            };
+        }).filter(function(image) {
+            return image && image.dataUrl;
+        });
+    }
+
+    function base64ImageDataUrl(value, type) {
+        var text = String(value || "");
+        if (!text) {
+            return "";
+        }
+        if (text.indexOf("data:") === 0) {
+            return text;
+        }
+        return "data:" + (type || "image/png") + ";base64," + text;
     }
 
     function openAiMessageContent(message) {

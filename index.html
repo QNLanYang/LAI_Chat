@@ -7,7 +7,9 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <title>LAI Chat</title>
     <meta name="description" content="LAI Chat，本地优先的静态 AI 聊天客户端">
-    <link rel="icon" href="data:,">
+    <link rel="icon" href="assets/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="assets/favicon-32.png" sizes="32x32">
+    <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
     <link rel="stylesheet" href="styles.css">
     <script src="vendor/purify.min.js" defer></script>
     <script src="vendor/marked.min.js" defer></script>
@@ -23,11 +25,16 @@
         <aside class="sidebar" aria-label="会话和设置">
             <header class="brand">
                 <div>
-                    <h1>LAI Chat</h1>
+                    <h1 class="brand-title">
+                        <img class="brand-logo is-light" src="assets/lai-chat-wordmark-light.png" alt="LAI Chat">
+                        <img class="brand-logo is-dark" src="assets/lai-chat-wordmark-dark.png" alt="">
+                        <span>LAI Chat</span>
+                    </h1>
                     <p class="beta-note">测试版，仍在开发中 · © QNLanYang</p>
                     <p class="issue-note">欢迎在 GitHub 提交 issues · <a href="https://github.com/QNLanYang/LAI_Chat" target="_blank" rel="noreferrer">🔗Repo</a></p>
                     <p id="statusText">未连接</p>
                 </div>
+                <button class="ghost-button sidebar-close" type="button" id="sidebarCloseButton" aria-label="关闭菜单">关闭</button>
             </header>
 
             <nav class="app-nav" aria-label="应用导航">
@@ -56,6 +63,7 @@
                         <option value="lmstudio">LM Studio REST v1</option>
                         <option value="ollama">Ollama</option>
                         <option value="openai">OpenAI-compatible</option>
+                        <option value="gemini">Gemini OpenAI-compatible</option>
                         <option value="anthropic">Anthropic-compatible</option>
                     </select>
                 </label>
@@ -149,6 +157,10 @@
                     <input id="streamCheckbox" type="checkbox">
                     <span>流式输出</span>
                 </label>
+                <label class="check-row" id="responseImageGenerationField" hidden>
+                    <input id="responseImageGenerationCheckbox" type="checkbox">
+                    <span>允许 Responses 调用图片生成</span>
+                </label>
             </section>
 
             <footer class="sidebar-footer">
@@ -156,6 +168,7 @@
                 <button class="ghost-button danger" type="button" id="clearButton">清空</button>
             </footer>
         </aside>
+        <button class="sidebar-scrim" type="button" id="sidebarScrim" aria-label="关闭菜单" hidden></button>
 
         <main class="chat-panel" aria-label="聊天">
             <header class="chat-header">
@@ -163,7 +176,10 @@
                     <p class="eyebrow" id="providerLabel">LM Studio</p>
                     <h2 id="chatTitle">新会话</h2>
                 </div>
-                <div class="status-pill" id="connectionPill">Local first</div>
+                <div class="chat-header-actions">
+                    <button class="ghost-button mobile-menu-button" type="button" id="sidebarOpenButton" aria-label="打开菜单">菜单</button>
+                    <div class="status-pill" id="connectionPill">Local first</div>
+                </div>
             </header>
 
             <section class="messages" id="messages" aria-live="polite"></section>

@@ -7,7 +7,9 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <title>LAI Chat Settings</title>
     <meta name="description" content="LAI Chat 本地 AI 客户端设置">
-    <link rel="icon" href="data:,">
+    <link rel="icon" href="assets/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="assets/favicon-32.png" sizes="32x32">
+    <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
     <link rel="stylesheet" href="styles.css">
     <script src="providers.js" defer></script>
     <script src="theme.js" defer></script>
@@ -71,6 +73,10 @@
                         <option value="chat">Chat Completions</option>
                         <option value="responses">Responses</option>
                     </select>
+                </label>
+                <label class="check-row" id="presetResponseImageGenerationField" hidden>
+                    <input id="presetResponseImageGenerationCheckbox" type="checkbox">
+                    <span>允许 Responses 调用图片生成</span>
                 </label>
                 <label>
                     <span>API Key（本地 localStorage）</span>

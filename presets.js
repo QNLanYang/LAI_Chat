@@ -7,7 +7,11 @@
     function loadPresets() {
         var stored = readJson(KEYS.presets, null);
         if (Array.isArray(stored)) {
-            return stored.map(normalizePreset).filter(Boolean);
+            var normalized = stored.map(normalizePreset).filter(Boolean);
+            if (JSON.stringify(stored) !== JSON.stringify(normalized)) {
+                savePresets(normalized);
+            }
+            return normalized;
         }
         var presets = defaultPresets();
         savePresets(presets);
@@ -102,7 +106,8 @@
             provider: preset.provider,
             endpoint: preset.endpoint,
             model: preset.model || "",
-            openaiApi: preset.openaiApi || "chat"
+            openaiApi: preset.openaiApi || "chat",
+            responseImageGeneration: Boolean(preset.responseImageGeneration)
         });
     }
 
@@ -140,7 +145,7 @@
         if (!isImage && provider.defaultScheme === "auto" && provider.defaultAddress && config.isDefaultAddress(providerKey, endpoint)) {
             endpoint = provider.defaultAddress;
         }
-        return {
+        var normalized = {
             id: preset.id || preset.kind + "-" + Date.now(),
             name: preset.name || provider.label,
             kind: isImage ? "image" : "chat",
@@ -148,8 +153,32 @@
             endpoint: endpoint,
             apiKey: preset.apiKey || "",
             model: preset.model || provider.defaultModel || "",
-            openaiApi: preset.openaiApi || "chat"
+            openaiApi: preset.openaiApi || "chat",
+            responseImageGeneration: Boolean(preset.responseImageGeneration)
         };
+        if (isImage) {
+            normalized.resolution = normalizeImageResolution(preset.resolution);
+            normalized.aspect = isValidAspect(preset.aspect) ? preset.aspect : "1:1";
+        }
+        return normalized;
+    }
+
+    function isValidResolution(value) {
+        return ["720p", "1080p", "2k", "4k"].indexOf(value) !== -1;
+    }
+
+    function normalizeImageResolution(value) {
+        if (value === "1k") {
+            return "720p";
+        }
+        if (value === "1_9k") {
+            return "1080p";
+        }
+        return isValidResolution(value) ? value : "720p";
+    }
+
+    function isValidAspect(value) {
+        return ["1:1", "3:4", "2:3", "9:16", "4:3", "3:2", "16:9"].indexOf(value) !== -1;
     }
 
     function readJson(key, fallback) {

@@ -11,6 +11,7 @@
         activePreset: null,
         references: [],
         jobs: [],
+        modelOptions: [],
         isGenerating: false,
         isTesting: false
     };
@@ -20,14 +21,22 @@
     function init() {
         elements = {
             statusText: document.getElementById("imageStatusText"),
+            sidebarOpenButton: document.getElementById("imageSidebarOpenButton"),
+            sidebarCloseButton: document.getElementById("imageSidebarCloseButton"),
+            sidebarScrim: document.getElementById("imageSidebarScrim"),
             presetSelect: document.getElementById("imagePresetSelect"),
             providerSelect: document.getElementById("imageProviderSelect"),
             endpointInput: document.getElementById("imageEndpointInput"),
+            modelPicker: document.getElementById("imageModelPicker"),
             modelInput: document.getElementById("imageModelInput"),
+            modelMenuButton: document.getElementById("imageModelMenuButton"),
+            modelMenu: document.getElementById("imageModelMenu"),
             apiKeyInput: document.getElementById("imageApiKeyInput"),
             requestPreview: document.getElementById("imageRequestPreview"),
             testButton: document.getElementById("imageTestButton"),
-            sizeSelect: document.getElementById("imageSizeSelect"),
+            resolutionSelect: document.getElementById("imageResolutionSelect"),
+            aspectSelect: document.getElementById("imageAspectSelect"),
+            sizePreview: document.getElementById("imageSizePreview"),
             countInput: document.getElementById("imageCountInput"),
             providerLabel: document.getElementById("imageProviderLabel"),
             statusPill: document.getElementById("imageStatusPill"),
@@ -50,10 +59,26 @@
     }
 
     function bindEvents() {
+        elements.sidebarOpenButton.addEventListener("click", function() {
+            setSidebarOpen(true);
+        });
+        elements.sidebarCloseButton.addEventListener("click", function() {
+            setSidebarOpen(false);
+        });
+        elements.sidebarScrim.addEventListener("click", function() {
+            setSidebarOpen(false);
+        });
+        document.addEventListener("keydown", function(event) {
+            if (event.key === "Escape") {
+                setSidebarOpen(false);
+            }
+        });
         elements.presetSelect.addEventListener("change", function() {
             presetsApi.setActivePreset("image", elements.presetSelect.value);
             loadActivePreset();
+            renderModelOptions([]);
             renderAll();
+            setSidebarOpen(false);
         });
         elements.providerSelect.addEventListener("change", function() {
             var provider = config.getImageProvider(elements.providerSelect.value);
@@ -70,6 +95,24 @@
             elements.apiKeyInput
         ].forEach(function(input) {
             input.addEventListener("input", syncPresetFromForm);
+        });
+        elements.modelMenuButton.addEventListener("click", function() {
+            toggleModelMenu(elements.modelMenu.hidden);
+        });
+        document.addEventListener("click", function(event) {
+            if (!elements.modelPicker.contains(event.target)) {
+                toggleModelMenu(false);
+            }
+        });
+        elements.modelInput.addEventListener("keydown", function(event) {
+            if (event.key === "ArrowDown" && state.modelOptions.length) {
+                event.preventDefault();
+                toggleModelMenu(true);
+                focusFirstModelOption();
+            }
+            if (event.key === "Escape") {
+                toggleModelMenu(false);
+            }
         });
         elements.endpointInput.addEventListener("blur", function() {
             var normalized = config.normalizeImageAddress(elements.endpointInput.value, state.activePreset.provider);
@@ -104,6 +147,14 @@
             });
         });
         elements.form.addEventListener("submit", generateImage);
+        elements.resolutionSelect.addEventListener("change", syncPresetFromForm);
+        elements.aspectSelect.addEventListener("change", syncPresetFromForm);
+    }
+
+    function setSidebarOpen(open) {
+        document.body.classList.toggle("is-sidebar-open", Boolean(open));
+        elements.sidebarOpenButton.setAttribute("aria-expanded", open ? "true" : "false");
+        elements.sidebarScrim.hidden = !open;
     }
 
     function loadActivePreset() {
@@ -122,6 +173,8 @@
         updateStatus();
         renderReferences();
         renderResults();
+        renderModelOptions(state.modelOptions);
+        updateSizePreview();
         updateGeneratingState();
     }
 
@@ -153,16 +206,22 @@
         elements.endpointInput.value = state.activePreset.endpoint || provider.defaultAddress || "";
         elements.endpointInput.placeholder = config.imageAddressPlaceholderFor(state.activePreset.provider);
         elements.modelInput.value = state.activePreset.model || provider.defaultModel || "";
+        elements.modelInput.placeholder = state.modelOptions.length ? "选择或输入模型名" : "手动输入模型名";
         elements.apiKeyInput.value = state.activePreset.apiKey || "";
+        elements.resolutionSelect.value = normalizeImageResolution(state.activePreset.resolution);
+        elements.aspectSelect.value = state.activePreset.aspect || "1:1";
     }
 
     function syncPresetFromForm() {
         state.activePreset.endpoint = elements.endpointInput.value.trim();
         state.activePreset.model = elements.modelInput.value.trim();
         state.activePreset.apiKey = elements.apiKeyInput.value.trim();
+        state.activePreset.resolution = elements.resolutionSelect.value;
+        state.activePreset.aspect = elements.aspectSelect.value;
         saveActivePreset();
         updateRequestPreview();
         updateStatus();
+        updateSizePreview();
     }
 
     function saveActivePreset() {
@@ -172,11 +231,8 @@
     }
 
     function updateRequestPreview() {
-        var lines = [
-            "测试 GET: " + config.imageRequestUrlFor(state.activePreset, "models"),
-            "图片 POST: " + config.imageRequestUrlFor(state.activePreset, state.references.length ? "edit" : "generation")
-        ];
-        elements.requestPreview.textContent = lines.join("\n");
+        elements.requestPreview.textContent = "图片 POST: " + config.imageRequestUrlFor(state.activePreset, state.references.length ? "edit" : "generation");
+        elements.requestPreview.hidden = true;
     }
 
     function updateStatus() {
@@ -190,8 +246,9 @@
     async function generateImage(event) {
         event.preventDefault();
         syncPresetFromForm();
-        var prompt = elements.promptInput.value.trim();
-        if (!prompt || state.isGenerating) {
+        var rawPrompt = elements.promptInput.value.trim();
+        var requestPrompt = withImageSizeInstruction(rawPrompt);
+        if (!rawPrompt || state.isGenerating) {
             return;
         }
         if (!state.activePreset.endpoint) {
@@ -207,7 +264,7 @@
         updateGeneratingState();
         setFeedback("正在请求 " + config.imageRequestUrlFor(state.activePreset, state.references.length ? "edit" : "generation"), "ok");
         try {
-            var images = await requestImages(prompt);
+            var images = await requestImages(requestPrompt);
             if (!images.length) {
                 throw new Error("接口未返回图片。");
             }
@@ -215,7 +272,8 @@
                 id: "image-" + Date.now() + "-" + Math.random().toString(16).slice(2),
                 provider: state.activePreset.provider,
                 model: state.activePreset.model,
-                prompt: prompt,
+                prompt: rawPrompt,
+                size: selectedImageSize(),
                 images: images,
                 createdAt: new Date().toISOString()
             };
@@ -250,9 +308,15 @@
             await ensureOk(response);
             var data = await response.json();
             var models = extractImageModelNames(data);
+            renderModelOptions(models);
             if (models.length) {
                 var current = state.activePreset.model || config.getImageProvider(state.activePreset.provider).defaultModel || "";
                 var matched = current && models.indexOf(current) !== -1;
+                if (!state.activePreset.model) {
+                    state.activePreset.model = models[0];
+                    elements.modelInput.value = models[0];
+                    saveActivePreset();
+                }
                 setFeedback(matched ? "连接正常，当前模型在模型列表中。" : "连接正常，返回 " + models.length + " 个模型。", "ok");
             } else {
                 setFeedback("连接正常，但未返回可识别的模型列表。", "warn");
@@ -284,7 +348,7 @@
             model: state.activePreset.model,
             prompt: prompt,
             n: imageCount(),
-            size: elements.sizeSelect.value
+            size: requestImageSize()
         };
         var response = await fetch(config.imageRequestUrlFor(state.activePreset, "generation"), {
             method: "POST",
@@ -300,7 +364,7 @@
         form.append("model", state.activePreset.model);
         form.append("prompt", prompt);
         form.append("n", String(imageCount()));
-        form.append("size", elements.sizeSelect.value);
+        form.append("size", requestImageSize());
         state.references.forEach(function(image, index) {
             form.append("image[]", dataUrlToBlob(image.dataUrl, image.type), image.name || "reference-" + index + ".png");
         });
@@ -375,6 +439,67 @@
         return [];
     }
 
+    function renderModelOptions(models) {
+        state.modelOptions = uniqueValues((models || []).filter(Boolean));
+        elements.modelMenu.textContent = "";
+        state.modelOptions.forEach(function(model) {
+            var option = document.createElement("button");
+            option.type = "button";
+            option.className = "model-option" + (model === state.activePreset.model ? " is-selected" : "");
+            option.textContent = model;
+            option.addEventListener("click", function() {
+                selectModel(model);
+            });
+            option.addEventListener("keydown", function(event) {
+                if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    var next = option.nextElementSibling || elements.modelMenu.firstElementChild;
+                    next.focus();
+                }
+                if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    var previous = option.previousElementSibling || elements.modelMenu.lastElementChild;
+                    previous.focus();
+                }
+                if (event.key === "Escape") {
+                    toggleModelMenu(false);
+                    elements.modelInput.focus();
+                }
+            });
+            elements.modelMenu.appendChild(option);
+        });
+        elements.modelInput.placeholder = state.modelOptions.length ? "选择或输入模型名" : "手动输入模型名";
+        elements.modelMenuButton.disabled = state.isGenerating || state.isTesting || !state.modelOptions.length;
+        if (!state.modelOptions.length) {
+            toggleModelMenu(false);
+        }
+    }
+
+    function uniqueValues(values) {
+        return Array.from(new Set(values));
+    }
+
+    function toggleModelMenu(open) {
+        var shouldOpen = Boolean(open && state.modelOptions.length && !state.isGenerating && !state.isTesting);
+        elements.modelMenu.hidden = !shouldOpen;
+        elements.modelMenuButton.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+    }
+
+    function focusFirstModelOption() {
+        var option = elements.modelMenu.querySelector(".model-option");
+        if (option) {
+            option.focus();
+        }
+    }
+
+    function selectModel(model) {
+        elements.modelInput.value = model;
+        syncPresetFromForm();
+        renderModelOptions(state.modelOptions);
+        toggleModelMenu(false);
+        elements.modelInput.focus();
+    }
+
     function extractOpenAiImages(data) {
         return (data.data || []).map(function(item) {
             if (item.b64_json) {
@@ -400,6 +525,94 @@
 
     function imageCount() {
         return Math.min(4, Math.max(1, parseInt(elements.countInput.value, 10) || 1));
+    }
+
+    function selectedImageSize() {
+        var resolution = normalizeImageResolution(elements.resolutionSelect.value);
+        var aspect = elements.aspectSelect.value || "1:1";
+        var preset = imageResolutionPreset(resolution);
+        var parts = aspect.split(":").map(function(value) {
+            return parseInt(value, 10) || 1;
+        });
+        var ratioW = parts[0] || 1;
+        var ratioH = parts[1] || 1;
+        var width = Math.sqrt(preset.pixels * ratioW / ratioH);
+        var height = Math.sqrt(preset.pixels * ratioH / ratioW);
+        return {
+            resolution: resolution,
+            aspect: aspect,
+            width: floorToStep(width, 16),
+            height: floorToStep(height, 16)
+        };
+    }
+
+    function imageResolutionPreset(value) {
+        var preset = {
+            "720p": { width: 1280, height: 720 },
+            "1080p": { width: 1920, height: 1080 },
+            "2k": { width: 2560, height: 1440 },
+            "4k": { width: 3840, height: 2160 }
+        }[normalizeImageResolution(value)] || { width: 1280, height: 720 };
+        return Object.assign({}, preset, {
+            pixels: preset.width * preset.height
+        });
+    }
+
+    function normalizeImageResolution(value) {
+        if (value === "1k") {
+            return "720p";
+        }
+        if (value === "1_9k") {
+            return "1080p";
+        }
+        return ["720p", "1080p", "2k", "4k"].indexOf(value) !== -1 ? value : "720p";
+    }
+
+    function floorToStep(value, step) {
+        return Math.max(step, Math.floor(value / step) * step);
+    }
+
+    function requestImageSize() {
+        var provider = config.getImageProvider(state.activePreset.provider);
+        var size = selectedImageSize();
+        if (supportsExactImageSize(provider)) {
+            return size.width + "x" + size.height;
+        }
+        if (provider.imageSizeMode === "official" || provider.imageSizeMode === "model") {
+            if (size.aspect === "1:1") {
+                return "1024x1024";
+            }
+            if (size.width >= size.height) {
+                return "1536x1024";
+            }
+            return "1024x1536";
+        }
+        return "";
+    }
+
+    function supportsExactImageSize(provider) {
+        var model = (state.activePreset.model || provider.defaultModel || "").toLowerCase();
+        return provider.mode === "openaiImages" && /^gpt-image-2(?:-|$)/.test(model);
+    }
+
+    function withImageSizeInstruction(prompt) {
+        var size = selectedImageSize();
+        var instruction = "Target image: " + size.aspect + " aspect ratio, around " + size.width + "x" + size.height + " px.";
+        if (!prompt) {
+            return "";
+        }
+        return prompt + "\n\n" + instruction;
+    }
+
+    function updateSizePreview() {
+        var size = selectedImageSize();
+        var provider = config.getImageProvider(state.activePreset.provider);
+        var text = "目标约 " + size.width + " x " + size.height + " px";
+        var requestSize = requestImageSize();
+        if (provider.mode === "openaiImages" && requestSize) {
+            text += " · API 请求 " + requestSize;
+        }
+        elements.sizePreview.textContent = text;
     }
 
     function renderReferences() {
@@ -543,6 +756,11 @@
         elements.testButton.textContent = state.isTesting ? "测试中" : "测试连接/模型";
         elements.providerSelect.disabled = state.isGenerating || state.isTesting;
         elements.presetSelect.disabled = state.isGenerating || state.isTesting;
+        elements.modelInput.disabled = state.isGenerating || state.isTesting;
+        elements.modelMenuButton.disabled = state.isGenerating || state.isTesting || !state.modelOptions.length;
+        if (state.isGenerating || state.isTesting) {
+            toggleModelMenu(false);
+        }
     }
 
     function setFeedback(text, tone) {
