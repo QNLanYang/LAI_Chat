@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="styles.css">
     <script src="providers.js" defer></script>
     <script src="theme.js" defer></script>
+    <script src="secrets.js" defer></script>
     <script src="presets.js" defer></script>
     <script src="settings.js" defer></script>
 </head>
@@ -47,6 +48,11 @@
                     <button class="ghost-button" type="button" id="addPresetButton">新增预设</button>
                     <button class="ghost-button danger" type="button" id="deletePresetButton">删除预设</button>
                 </div>
+                <div class="row-actions">
+                    <button class="ghost-button" type="button" id="importPresetButton">导入预设</button>
+                    <button class="ghost-button" type="button" id="exportPresetButton">导出预设</button>
+                    <input id="presetImportInput" type="file" accept="application/json,.json" hidden>
+                </div>
             </section>
 
             <section class="preset-panel settings">
@@ -54,16 +60,17 @@
                 <label>
                     <span>名称</span>
                     <input id="presetNameInput" spellcheck="false" autocomplete="off">
+                    <small class="field-error" id="presetNameError"></small>
                 </label>
                 <label>
                     <span>Provider</span>
                     <select id="presetProviderSelect"></select>
                 </label>
-                <label>
+                <label id="presetEndpointField">
                     <span>地址</span>
                     <input id="presetEndpointInput" type="text" inputmode="url" spellcheck="false" autocomplete="off">
                 </label>
-                <label>
+                <label id="presetModelField">
                     <span>模型</span>
                     <input id="presetModelInput" spellcheck="false" autocomplete="off">
                 </label>
@@ -78,11 +85,14 @@
                     <input id="presetResponseImageGenerationCheckbox" type="checkbox">
                     <span>允许 Responses 调用图片生成</span>
                 </label>
-                <label>
+                <label id="presetApiKeyField">
                     <span>API Key（本地 localStorage）</span>
                     <input id="presetApiKeyInput" type="password" spellcheck="false" autocomplete="new-password">
                 </label>
                 <div class="request-preview" id="presetPreview" aria-live="polite"></div>
+                <div class="row-actions settings-save-actions">
+                    <button class="send-button" type="button" id="savePresetButton">保存预设</button>
+                </div>
                 <div class="connection-feedback" id="settingsFeedback" aria-live="polite"></div>
             </section>
         </main>

@@ -3,6 +3,8 @@
 
     var config = window.LocalAiConfig;
     var presetsApi = window.LocalAiPresets;
+    var secrets = window.LocalAiSecrets;
+    var mediaStore = window.LocalAiMediaStore;
     var IMAGE_KEY = config.STORAGE_KEYS.imageJobs;
 
     var elements = {};
@@ -12,6 +14,7 @@
         references: [],
         jobs: [],
         modelOptions: [],
+        objectUrls: [],
         isGenerating: false,
         isTesting: false
     };
@@ -34,8 +37,17 @@
             apiKeyInput: document.getElementById("imageApiKeyInput"),
             requestPreview: document.getElementById("imageRequestPreview"),
             testButton: document.getElementById("imageTestButton"),
+            sizeModeSelect: document.getElementById("imageSizeModeSelect"),
+            nativeSizeField: document.getElementById("imageNativeSizeField"),
+            nativeSizeSelect: document.getElementById("imageNativeSizeSelect"),
+            resolutionField: document.getElementById("imageResolutionField"),
             resolutionSelect: document.getElementById("imageResolutionSelect"),
+            aspectField: document.getElementById("imageAspectField"),
             aspectSelect: document.getElementById("imageAspectSelect"),
+            qualityField: document.getElementById("imageQualityField"),
+            qualitySelect: document.getElementById("imageQualitySelect"),
+            backgroundField: document.getElementById("imageBackgroundField"),
+            backgroundSelect: document.getElementById("imageBackgroundSelect"),
             sizePreview: document.getElementById("imageSizePreview"),
             countInput: document.getElementById("imageCountInput"),
             providerLabel: document.getElementById("imageProviderLabel"),
@@ -56,6 +68,9 @@
         loadActivePreset();
         bindEvents();
         renderAll();
+        migrateLegacyJobs().catch(function(error) {
+            setFeedback(explainError(error), "warn");
+        });
     }
 
     function bindEvents() {
@@ -81,11 +96,14 @@
             setSidebarOpen(false);
         });
         elements.providerSelect.addEventListener("change", function() {
+            if (!state.activePreset) {
+                return;
+            }
             var provider = config.getImageProvider(elements.providerSelect.value);
             state.activePreset.provider = elements.providerSelect.value;
             state.activePreset.endpoint = provider.defaultAddress || "";
             state.activePreset.model = provider.defaultModel || "";
-            state.activePreset.apiKey = elements.apiKeyInput.value.trim();
+            state.activePreset.apiKey = secrets.normalizeApiKey(elements.apiKeyInput.value);
             saveActivePreset();
             renderAll();
         });
@@ -115,6 +133,9 @@
             }
         });
         elements.endpointInput.addEventListener("blur", function() {
+            if (!state.activePreset) {
+                return;
+            }
             var normalized = config.normalizeImageAddress(elements.endpointInput.value, state.activePreset.provider);
             if (normalized) {
                 elements.endpointInput.value = normalized;
@@ -147,8 +168,38 @@
             });
         });
         elements.form.addEventListener("submit", generateImage);
+        elements.sizeModeSelect.addEventListener("change", function() {
+            if (!state.activePreset) {
+                return;
+            }
+            state.activePreset.sizeMode = elements.sizeModeSelect.value === "custom" ? "custom" : "native";
+            if (state.activePreset.sizeMode === "native") {
+                state.activePreset.nativeSize = validNativeSizeOrDefault(
+                    state.activePreset.nativeSize,
+                    config.getImageProvider(state.activePreset.provider)
+                );
+            }
+            saveActivePreset();
+            updateSizeModeVisibility();
+            updateRequestPreview();
+            updateStatus();
+            updateSizePreview();
+        });
+        elements.nativeSizeSelect.addEventListener("change", function() {
+            if (!state.activePreset) {
+                return;
+            }
+            state.activePreset.nativeSize = elements.nativeSizeSelect.value;
+            saveActivePreset();
+            updateRequestPreview();
+            updateStatus();
+            updateSizePreview();
+        });
         elements.resolutionSelect.addEventListener("change", syncPresetFromForm);
         elements.aspectSelect.addEventListener("change", syncPresetFromForm);
+        elements.qualitySelect.addEventListener("change", syncPresetFromForm);
+        elements.backgroundSelect.addEventListener("change", syncPresetFromForm);
+        window.addEventListener("beforeunload", revokeObjectUrls);
     }
 
     function setSidebarOpen(open) {
@@ -160,10 +211,6 @@
     function loadActivePreset() {
         state.presets = presetsApi.presetsByKind("image");
         state.activePreset = presetsApi.getActivePreset("image");
-        if (!state.activePreset) {
-            state.activePreset = presetsApi.newPreset("image");
-            presetsApi.upsertPreset(state.activePreset);
-        }
     }
 
     function renderAll() {
@@ -191,34 +238,96 @@
     function renderPresetSelect() {
         state.presets = presetsApi.presetsByKind("image");
         elements.presetSelect.textContent = "";
+        if (!state.presets.length) {
+            var empty = document.createElement("option");
+            empty.value = "";
+            empty.textContent = "未配置预设";
+            elements.presetSelect.appendChild(empty);
+            elements.presetSelect.value = "";
+            return;
+        }
         state.presets.forEach(function(preset) {
             var option = document.createElement("option");
             option.value = preset.id;
             option.textContent = preset.name;
             elements.presetSelect.appendChild(option);
         });
-        elements.presetSelect.value = state.activePreset.id;
+        elements.presetSelect.value = state.activePreset ? state.activePreset.id : "";
     }
 
     function applyPresetToForm() {
+        if (!state.activePreset) {
+            elements.providerSelect.value = "";
+            elements.endpointInput.value = "";
+            elements.endpointInput.placeholder = config.imageAddressPlaceholderFor("");
+            elements.modelInput.value = "";
+            elements.modelInput.placeholder = "请先在设置页创建预设";
+            elements.apiKeyInput.value = "";
+            elements.sizeModeSelect.value = "native";
+            renderNativeSizeOptions([]);
+            renderQualityOptions([]);
+            renderBackgroundOptions([]);
+            elements.nativeSizeSelect.value = "auto";
+            elements.resolutionSelect.value = "720p";
+            elements.aspectSelect.value = "1:1";
+            elements.qualitySelect.value = "auto";
+            elements.backgroundSelect.value = "auto";
+            updateSizeModeVisibility();
+            return;
+        }
         var provider = config.getImageProvider(state.activePreset.provider);
         elements.providerSelect.value = state.activePreset.provider;
-        elements.endpointInput.value = state.activePreset.endpoint || provider.defaultAddress || "";
+        elements.endpointInput.value = state.activePreset.endpoint || "";
         elements.endpointInput.placeholder = config.imageAddressPlaceholderFor(state.activePreset.provider);
-        elements.modelInput.value = state.activePreset.model || provider.defaultModel || "";
+        elements.modelInput.value = state.activePreset.model || "";
         elements.modelInput.placeholder = state.modelOptions.length ? "选择或输入模型名" : "手动输入模型名";
         elements.apiKeyInput.value = state.activePreset.apiKey || "";
+        elements.sizeModeSelect.value = state.activePreset.sizeMode === "custom" ? "custom" : "native";
+        renderNativeSizeOptions(nativeSizesForCurrentModel(provider));
+        renderQualityOptions(qualityOptionsForCurrentModel(provider));
+        renderBackgroundOptions(backgroundOptionsForCurrentModel(provider));
+        elements.nativeSizeSelect.value = validNativeSizeOrDefault(state.activePreset.nativeSize, provider);
         elements.resolutionSelect.value = normalizeImageResolution(state.activePreset.resolution);
         elements.aspectSelect.value = state.activePreset.aspect || "1:1";
+        elements.qualitySelect.value = validQualityOrDefault(state.activePreset.imageQuality, provider);
+        elements.backgroundSelect.value = validBackgroundOrDefault(state.activePreset.imageBackground, provider);
+        updateSizeModeVisibility();
+        updateQualityBackgroundVisibility(provider);
     }
 
     function syncPresetFromForm() {
+        if (!state.activePreset) {
+            return;
+        }
+        var previousModel = state.activePreset.model || "";
         state.activePreset.endpoint = elements.endpointInput.value.trim();
         state.activePreset.model = elements.modelInput.value.trim();
-        state.activePreset.apiKey = elements.apiKeyInput.value.trim();
+        state.activePreset.apiKey = secrets.normalizeApiKey(elements.apiKeyInput.value);
+        var provider = config.getImageProvider(state.activePreset.provider);
+        if (previousModel !== state.activePreset.model) {
+            renderNativeSizeOptions(nativeSizesForCurrentModel(provider));
+            renderQualityOptions(qualityOptionsForCurrentModel(provider));
+            renderBackgroundOptions(backgroundOptionsForCurrentModel(provider));
+        }
+        state.activePreset.sizeMode = elements.sizeModeSelect.value === "custom" ? "custom" : "native";
+        state.activePreset.nativeSize = validNativeSizeOrDefault(
+            elements.nativeSizeSelect.value || state.activePreset.nativeSize,
+            provider
+        );
+        state.activePreset.imageQuality = validQualityOrDefault(
+            elements.qualitySelect.value || state.activePreset.imageQuality,
+            provider
+        );
+        state.activePreset.imageBackground = validBackgroundOrDefault(
+            elements.backgroundSelect.value || state.activePreset.imageBackground,
+            provider
+        );
+        elements.nativeSizeSelect.value = state.activePreset.nativeSize;
+        elements.backgroundSelect.value = state.activePreset.imageBackground;
         state.activePreset.resolution = elements.resolutionSelect.value;
         state.activePreset.aspect = elements.aspectSelect.value;
         saveActivePreset();
+        updateSizeModeVisibility();
         updateRequestPreview();
         updateStatus();
         updateSizePreview();
@@ -231,11 +340,23 @@
     }
 
     function updateRequestPreview() {
+        if (!state.activePreset) {
+            elements.requestPreview.textContent = "请先在设置页创建图片预设。";
+            elements.requestPreview.hidden = true;
+            return;
+        }
         elements.requestPreview.textContent = "图片 POST: " + config.imageRequestUrlFor(state.activePreset, state.references.length ? "edit" : "generation");
         elements.requestPreview.hidden = true;
     }
 
     function updateStatus() {
+        if (!state.activePreset) {
+            elements.providerLabel.textContent = "未配置";
+            elements.statusText.textContent = "未配置 Provider";
+            elements.statusPill.textContent = "未配置";
+            elements.statusPill.className = "status-pill is-warn";
+            return;
+        }
         var provider = config.getImageProvider(state.activePreset.provider);
         elements.providerLabel.textContent = provider.label;
         elements.statusText.textContent = provider.label + " · " + (state.activePreset.model || provider.defaultModel || "未选择模型");
@@ -249,6 +370,10 @@
         var rawPrompt = elements.promptInput.value.trim();
         var requestPrompt = withImageSizeInstruction(rawPrompt);
         if (!rawPrompt || state.isGenerating) {
+            return;
+        }
+        if (!state.activePreset || !state.activePreset.provider) {
+            setFeedback("请先在设置页创建并选择图片 Provider 预设。", "error");
             return;
         }
         if (!state.activePreset.endpoint) {
@@ -268,18 +393,21 @@
             if (!images.length) {
                 throw new Error("接口未返回图片。");
             }
+            var jobId = "image-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+            var storedImages = await storeGeneratedImages(jobId, images, rawPrompt);
             var job = {
-                id: "image-" + Date.now() + "-" + Math.random().toString(16).slice(2),
+                id: jobId,
                 provider: state.activePreset.provider,
                 model: state.activePreset.model,
                 prompt: rawPrompt,
                 size: selectedImageSize(),
-                images: images,
+                images: storedImages,
                 createdAt: new Date().toISOString()
             };
             state.jobs.unshift(job);
             state.jobs = state.jobs.slice(0, 40);
             saveJobs();
+            pruneStoredImages();
             renderResults();
             setFeedback("生成完成。", "ok");
         } catch (error) {
@@ -293,6 +421,10 @@
 
     async function testImageConnection() {
         syncPresetFromForm();
+        if (!state.activePreset || !state.activePreset.provider) {
+            setFeedback("请先在设置页创建并选择图片 Provider 预设。", "error");
+            return [];
+        }
         if (!state.activePreset.endpoint) {
             setFeedback("请先填写图片 API 地址。", "error");
             return [];
@@ -344,12 +476,23 @@
     }
 
     async function requestOpenAiImageGeneration(prompt) {
+        var requestSize = requestImageSize();
         var body = {
             model: state.activePreset.model,
             prompt: prompt,
-            n: imageCount(),
-            size: requestImageSize()
+            n: imageCount()
         };
+        if (requestSize) {
+            body.size = requestSize;
+        }
+        var requestQuality = requestImageQuality();
+        if (requestQuality) {
+            body.quality = requestQuality;
+        }
+        var requestBackground = requestImageBackground();
+        if (requestBackground) {
+            body.background = requestBackground;
+        }
         var response = await fetch(config.imageRequestUrlFor(state.activePreset, "generation"), {
             method: "POST",
             headers: imageHeaders({ json: true, bearer: true }),
@@ -360,11 +503,22 @@
     }
 
     async function requestOpenAiImageEdit(prompt) {
+        var requestSize = requestImageSize();
         var form = new FormData();
         form.append("model", state.activePreset.model);
         form.append("prompt", prompt);
         form.append("n", String(imageCount()));
-        form.append("size", requestImageSize());
+        if (requestSize) {
+            form.append("size", requestSize);
+        }
+        var requestQuality = requestImageQuality();
+        if (requestQuality) {
+            form.append("quality", requestQuality);
+        }
+        var requestBackground = requestImageBackground();
+        if (requestBackground) {
+            form.append("background", requestBackground);
+        }
         state.references.forEach(function(image, index) {
             form.append("image[]", dataUrlToBlob(image.dataUrl, image.type), image.name || "reference-" + index + ".png");
         });
@@ -387,7 +541,8 @@
                 }
             });
         });
-        var response = await fetch(config.imageRequestUrlFor(state.activePreset, "generation") + "?key=" + encodeURIComponent(state.activePreset.apiKey || ""), {
+        var apiKey = secrets.apiKeyForHeader(state.activePreset.apiKey, "API Key");
+        var response = await fetch(config.imageRequestUrlFor(state.activePreset, "generation") + "?key=" + encodeURIComponent(apiKey), {
             method: "POST",
             headers: imageHeaders({ json: true }),
             body: JSON.stringify({
@@ -406,17 +561,19 @@
         if (options.json) {
             headers["Content-Type"] = "application/json";
         }
-        if (options.bearer && state.activePreset.apiKey) {
-            headers.Authorization = "Bearer " + state.activePreset.apiKey;
+        var apiKey = secrets.apiKeyForHeader(state.activePreset.apiKey, "API Key");
+        if (options.bearer && apiKey) {
+            headers.Authorization = "Bearer " + apiKey;
         }
         return headers;
     }
 
     function imageModelHeaders() {
         var provider = config.getImageProvider(state.activePreset.provider);
+        var apiKey = secrets.apiKeyForHeader(state.activePreset.apiKey, "API Key");
         if (provider.mode === "geminiImages") {
-            return state.activePreset.apiKey ? {
-                "x-goog-api-key": state.activePreset.apiKey
+            return apiKey ? {
+                "x-goog-api-key": apiKey
             } : {};
         }
         return imageHeaders({ bearer: true });
@@ -442,10 +599,11 @@
     function renderModelOptions(models) {
         state.modelOptions = uniqueValues((models || []).filter(Boolean));
         elements.modelMenu.textContent = "";
+        var activeModel = state.activePreset ? state.activePreset.model : "";
         state.modelOptions.forEach(function(model) {
             var option = document.createElement("button");
             option.type = "button";
-            option.className = "model-option" + (model === state.activePreset.model ? " is-selected" : "");
+            option.className = "model-option" + (model === activeModel ? " is-selected" : "");
             option.textContent = model;
             option.addEventListener("click", function() {
                 selectModel(model);
@@ -493,6 +651,9 @@
     }
 
     function selectModel(model) {
+        if (!state.activePreset) {
+            return;
+        }
         elements.modelInput.value = model;
         syncPresetFromForm();
         renderModelOptions(state.modelOptions);
@@ -501,12 +662,22 @@
     }
 
     function extractOpenAiImages(data) {
+        var responseType = imageTypeFromFormat(data && data.output_format);
         return (data.data || []).map(function(item) {
+            var itemType = imageTypeFromFormat(item.output_format) || responseType || "image/png";
             if (item.b64_json) {
-                return "data:image/png;base64," + item.b64_json;
+                return "data:" + itemType + ";base64," + item.b64_json;
             }
             return item.url || "";
         }).filter(Boolean);
+    }
+
+    function imageTypeFromFormat(format) {
+        var value = String(format || "").toLowerCase();
+        if (value === "jpg") {
+            value = "jpeg";
+        }
+        return ["png", "jpeg", "webp"].indexOf(value) !== -1 ? "image/" + value : "";
     }
 
     function extractGeminiImages(data) {
@@ -528,6 +699,9 @@
     }
 
     function selectedImageSize() {
+        if (!state.activePreset || (state.activePreset.sizeMode || "native") !== "custom") {
+            return nativeImageSizeForProvider(config.getImageProvider(state.activePreset ? state.activePreset.provider : ""));
+        }
         var resolution = normalizeImageResolution(elements.resolutionSelect.value);
         var aspect = elements.aspectSelect.value || "1:1";
         var preset = imageResolutionPreset(resolution);
@@ -573,21 +747,50 @@
     }
 
     function requestImageSize() {
+        if (!state.activePreset) {
+            return "";
+        }
         var provider = config.getImageProvider(state.activePreset.provider);
+        if ((state.activePreset.sizeMode || "native") !== "custom") {
+            return validNativeSizeOrDefault(state.activePreset.nativeSize, provider);
+        }
         var size = selectedImageSize();
         if (supportsExactImageSize(provider)) {
             return size.width + "x" + size.height;
         }
         if (provider.imageSizeMode === "official" || provider.imageSizeMode === "model") {
-            if (size.aspect === "1:1") {
-                return "1024x1024";
-            }
-            if (size.width >= size.height) {
-                return "1536x1024";
-            }
-            return "1024x1536";
+            return mapCustomSizeToNative(size, provider);
         }
         return "";
+    }
+
+    function mapCustomSizeToNative(size, provider) {
+        var nativeSizes = validNativeSizes(provider);
+        var parsed = nativeSizes.map(function(nativeSize) {
+            var parts = String(nativeSize).split("x");
+            return {
+                value: nativeSize,
+                width: parseInt(parts[0], 10) || 0,
+                height: parseInt(parts[1], 10) || 0
+            };
+        }).filter(function(nativeSize) {
+            return nativeSize.width && nativeSize.height;
+        });
+        var match = null;
+        if (size.width === size.height) {
+            match = parsed.find(function(nativeSize) {
+                return nativeSize.width === nativeSize.height;
+            });
+        } else if (size.width > size.height) {
+            match = parsed.find(function(nativeSize) {
+                return nativeSize.width > nativeSize.height;
+            });
+        } else {
+            match = parsed.find(function(nativeSize) {
+                return nativeSize.height > nativeSize.width;
+            });
+        }
+        return match ? match.value : nativeSizes[0] || "";
     }
 
     function supportsExactImageSize(provider) {
@@ -596,6 +799,12 @@
     }
 
     function withImageSizeInstruction(prompt) {
+        if (!state.activePreset || (state.activePreset.sizeMode || "native") !== "custom") {
+            return prompt || "";
+        }
+        if (requestImageSize()) {
+            return prompt || "";
+        }
         var size = selectedImageSize();
         var instruction = "Target image: " + size.aspect + " aspect ratio, around " + size.width + "x" + size.height + " px.";
         if (!prompt) {
@@ -605,14 +814,196 @@
     }
 
     function updateSizePreview() {
-        var size = selectedImageSize();
+        if (!state.activePreset) {
+            elements.sizePreview.textContent = "请先在设置页创建图片预设。";
+            return;
+        }
         var provider = config.getImageProvider(state.activePreset.provider);
+        var mode = state.activePreset.sizeMode || "native";
+        if (mode !== "custom") {
+            var nativeSizes = nativeSizesForCurrentModel(provider);
+            var text = provider.imageSizeMode === "prompt" || !nativeSizes.length ?
+                "原生模式: 不额外注入尺寸提示" :
+                "原生尺寸: " + formatImageSizeLabel(validNativeSizeOrDefault(state.activePreset.nativeSize, provider));
+            if (nativeSizes.length) {
+                text += " · 可选 " + nativeSizes.map(formatImageSizeLabel).join(" / ");
+            }
+            if (qualityOptionsForCurrentModel(provider).length) {
+                text += " · 质量 " + validQualityOrDefault(state.activePreset.imageQuality, provider);
+            }
+            if (backgroundOptionsForCurrentModel(provider).length) {
+                text += " · 背景 " + validBackgroundOrDefault(state.activePreset.imageBackground, provider);
+            }
+            elements.sizePreview.textContent = text;
+            return;
+        }
+        var size = selectedImageSize();
         var text = "目标约 " + size.width + " x " + size.height + " px";
         var requestSize = requestImageSize();
         if (provider.mode === "openaiImages" && requestSize) {
             text += " · API 请求 " + requestSize;
         }
+        var requestQuality = requestImageQuality();
+        if (requestQuality) {
+            text += " · 质量 " + requestQuality;
+        }
+        var requestBackground = requestImageBackground();
+        if (requestBackground) {
+            text += " · 背景 " + requestBackground;
+        }
         elements.sizePreview.textContent = text;
+    }
+
+    function updateSizeModeVisibility() {
+        var isCustom = (elements.sizeModeSelect.value || "native") === "custom";
+        var provider = state.activePreset ? config.getImageProvider(state.activePreset.provider) : config.getImageProvider("");
+        setFieldVisible(elements.nativeSizeField, !isCustom && Boolean(nativeSizesForCurrentModel(provider).length));
+        setFieldVisible(elements.resolutionField, isCustom);
+        setFieldVisible(elements.aspectField, isCustom);
+        updateQualityBackgroundVisibility(provider);
+    }
+
+    function updateQualityBackgroundVisibility(provider) {
+        provider = provider || (state.activePreset ? config.getImageProvider(state.activePreset.provider) : config.getImageProvider(""));
+        setFieldVisible(elements.qualityField, Boolean(qualityOptionsForCurrentModel(provider).length));
+        setFieldVisible(elements.backgroundField, Boolean(backgroundOptionsForCurrentModel(provider).length));
+    }
+
+    function renderNativeSizeOptions(nativeSizes) {
+        var sizes = nativeSizes && nativeSizes.length ? nativeSizes.slice() : [];
+        elements.nativeSizeSelect.textContent = "";
+        sizes.forEach(function(size) {
+            var option = document.createElement("option");
+            option.value = size;
+            option.textContent = formatImageSizeLabel(size);
+            elements.nativeSizeSelect.appendChild(option);
+        });
+    }
+
+    function validNativeSizeOrDefault(value, provider) {
+        var nativeSizes = validNativeSizes(provider);
+        if (nativeSizes.indexOf(value) !== -1) {
+            return value;
+        }
+        return nativeSizes[0] || "";
+    }
+
+    function nativeImageSizeForProvider(provider) {
+        return validNativeSizeOrDefault("", provider);
+    }
+
+    function formatImageSizeLabel(value) {
+        if (value === "auto") {
+            return "自动";
+        }
+        return String(value || "").replace("x", " × ");
+    }
+
+    function validNativeSizes(provider) {
+        var sizes = nativeSizesForCurrentModel(provider);
+        return sizes && sizes.length ? sizes : [];
+    }
+
+    function nativeSizesForCurrentModel(provider) {
+        var model = currentImageModel(provider);
+        if (provider.mode !== "openaiImages") {
+            return provider.nativeSizes && provider.nativeSizes.length ? provider.nativeSizes.slice() : [];
+        }
+        if (model === "dall-e-2") {
+            return ["256x256", "512x512", "1024x1024"];
+        }
+        if (model === "dall-e-3") {
+            return ["1024x1024", "1792x1024", "1024x1792"];
+        }
+        return provider.nativeSizes && provider.nativeSizes.length ? provider.nativeSizes.slice() : [];
+    }
+
+    function renderQualityOptions(qualityOptions) {
+        var options = qualityOptions && qualityOptions.length ? qualityOptions.slice() : [];
+        elements.qualitySelect.textContent = "";
+        options.forEach(function(optionValue) {
+            var option = document.createElement("option");
+            option.value = optionValue;
+            option.textContent = optionValue === "auto" ? "自动" : optionValue;
+            elements.qualitySelect.appendChild(option);
+        });
+    }
+
+    function renderBackgroundOptions(backgroundOptions) {
+        var options = backgroundOptions && backgroundOptions.length ? backgroundOptions.slice() : [];
+        elements.backgroundSelect.textContent = "";
+        options.forEach(function(optionValue) {
+            var option = document.createElement("option");
+            option.value = optionValue;
+            option.textContent = optionValue === "auto" ? "自动" : optionValue;
+            elements.backgroundSelect.appendChild(option);
+        });
+    }
+
+    function validQualityOrDefault(value, provider) {
+        var options = qualityOptionsForCurrentModel(provider);
+        return options.indexOf(value) !== -1 ? value : options[0] || "";
+    }
+
+    function validBackgroundOrDefault(value, provider) {
+        var options = backgroundOptionsForCurrentModel(provider);
+        return options.indexOf(value) !== -1 ? value : options[0] || "";
+    }
+
+    function requestImageQuality() {
+        if (!state.activePreset) {
+            return "";
+        }
+        var provider = config.getImageProvider(state.activePreset.provider);
+        if (!qualityOptionsForCurrentModel(provider).length) {
+            return "";
+        }
+        return validQualityOrDefault(elements.qualitySelect.value || state.activePreset.imageQuality, provider);
+    }
+
+    function requestImageBackground() {
+        if (!state.activePreset) {
+            return "";
+        }
+        var provider = config.getImageProvider(state.activePreset.provider);
+        if (!backgroundOptionsForCurrentModel(provider).length) {
+            return "";
+        }
+        return validBackgroundOrDefault(elements.backgroundSelect.value || state.activePreset.imageBackground, provider);
+    }
+
+    function qualityOptionsForCurrentModel(provider) {
+        if (provider.mode !== "openaiImages") {
+            return provider.qualityOptions && provider.qualityOptions.length ? provider.qualityOptions.slice() : [];
+        }
+        var model = currentImageModel(provider);
+        if (model === "dall-e-2") {
+            return ["standard"];
+        }
+        if (model === "dall-e-3") {
+            return ["standard", "hd"];
+        }
+        return provider.qualityOptions && provider.qualityOptions.length ? provider.qualityOptions.slice() : [];
+    }
+
+    function backgroundOptionsForCurrentModel(provider) {
+        if (provider.mode !== "openaiImages") {
+            return provider.backgroundOptions && provider.backgroundOptions.length ? provider.backgroundOptions.slice() : [];
+        }
+        var model = currentImageModel(provider);
+        if (model === "dall-e-2" || model === "dall-e-3") {
+            return [];
+        }
+        return provider.backgroundOptions && provider.backgroundOptions.length ? provider.backgroundOptions.slice() : [];
+    }
+
+    function currentImageModel(provider) {
+        return String(state.activePreset && state.activePreset.model || provider.defaultModel || "").trim().toLowerCase();
+    }
+
+    function setFieldVisible(field, visible) {
+        field.hidden = !visible;
+        field.setAttribute("aria-hidden", visible ? "false" : "true");
     }
 
     function renderReferences() {
@@ -663,16 +1054,46 @@
             prompt.textContent = job.prompt;
             var grid = document.createElement("div");
             grid.className = "image-grid";
-            job.images.forEach(function(src) {
+            job.images.forEach(function(image) {
+                var src = image.objectUrl || image.dataUrl || image.url || "";
+                var frame = document.createElement("div");
+                frame.className = "image-frame";
+                if (image.missing) {
+                    frame.classList.add("is-missing");
+                }
                 var link = document.createElement("a");
-                link.href = src;
+                link.href = src || "#";
                 link.target = "_blank";
                 link.rel = "noreferrer";
-                var img = document.createElement("img");
-                img.src = src;
-                img.alt = job.prompt;
-                link.appendChild(img);
-                grid.appendChild(link);
+                if (src) {
+                    var img = document.createElement("img");
+                    img.src = src;
+                    img.alt = image.name || job.prompt;
+                    link.appendChild(img);
+                } else {
+                    var placeholder = document.createElement("div");
+                    placeholder.className = "image-placeholder";
+                    placeholder.textContent = "正在读取图片";
+                    link.appendChild(placeholder);
+                }
+                var download = document.createElement("button");
+                download.type = "button";
+                download.className = "ghost-button image-download-button";
+                download.textContent = "下载";
+                download.addEventListener("click", function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    downloadImage(image);
+                });
+                frame.appendChild(link);
+                frame.appendChild(download);
+                if (image.missing) {
+                    var missing = document.createElement("span");
+                    missing.className = "image-missing-label";
+                    missing.textContent = "本地图片已清理";
+                    frame.appendChild(missing);
+                }
+                grid.appendChild(frame);
             });
             article.appendChild(meta);
             article.appendChild(prompt);
@@ -736,27 +1157,280 @@
         return new Blob([bytes], { type: type || "image/png" });
     }
 
+    async function storeGeneratedImages(jobId, images, prompt) {
+        var stored = [];
+        for (var index = 0; index < images.length; index += 1) {
+            stored.push(await storeGeneratedImage(jobId, images[index], index, prompt));
+        }
+        return stored;
+    }
+
+    async function storeGeneratedImage(jobId, src, index, prompt) {
+        if (isDataUrl(src)) {
+            var type = mimeTypeFromDataUrl(src) || "image/png";
+            var blob = dataUrlToBlob(src, type);
+            var imageId = jobId + "-image-" + index;
+            var name = imageFileName(prompt, index, type);
+            await mediaStore.putImage({
+                id: imageId,
+                blob: blob,
+                type: type,
+                name: name,
+                createdAt: new Date().toISOString()
+            });
+            return {
+                id: imageId,
+                type: type,
+                name: name,
+                size: blob.size,
+                objectUrl: trackObjectUrl(URL.createObjectURL(blob))
+            };
+        }
+        return {
+            id: "",
+            url: src,
+            objectUrl: src,
+            type: "",
+            name: imageFileName(prompt, index, "image/png"),
+            size: 0
+        };
+    }
+
+    async function hydrateStoredImages() {
+        revokeObjectUrls();
+        var changed = false;
+        for (var jobIndex = 0; jobIndex < state.jobs.length; jobIndex += 1) {
+            var job = state.jobs[jobIndex];
+            if (!Array.isArray(job.images)) {
+                job.images = [];
+                changed = true;
+            }
+            for (var imageIndex = 0; imageIndex < job.images.length; imageIndex += 1) {
+                var image = job.images[imageIndex];
+                if (typeof image === "string") {
+                    continue;
+                }
+                if (!image || !image.id || image.objectUrl) {
+                    continue;
+                }
+                try {
+                    var record = await mediaStore.getImage(image.id);
+                    if (record && record.blob) {
+                        image.objectUrl = trackObjectUrl(URL.createObjectURL(record.blob));
+                        image.type = image.type || record.type || record.blob.type;
+                        image.name = image.name || record.name || imageFileName(job.prompt, imageIndex, image.type);
+                        image.size = image.size || record.blob.size;
+                    } else {
+                        image.missing = true;
+                        changed = true;
+                    }
+                } catch (error) {
+                    image.missing = true;
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            saveJobs();
+        }
+    }
+
+    function trackObjectUrl(url) {
+        state.objectUrls.push(url);
+        return url;
+    }
+
+    function revokeObjectUrls() {
+        state.objectUrls.forEach(function(url) {
+            URL.revokeObjectURL(url);
+        });
+        state.objectUrls = [];
+    }
+
+    async function downloadImage(image) {
+        var href = image.objectUrl || image.dataUrl || image.url || "";
+        if (!href && image.id) {
+            var record = await mediaStore.getImage(image.id);
+            if (record && record.blob) {
+                href = trackObjectUrl(URL.createObjectURL(record.blob));
+            }
+        }
+        if (!href) {
+            setFeedback("这张图片的本地文件已经不可用。", "error");
+            return;
+        }
+        var link = document.createElement("a");
+        link.href = href;
+        link.download = image.name || "lai-chat-image.png";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+    }
+
+    async function migrateLegacyJobs() {
+        var changed = false;
+        for (var jobIndex = 0; jobIndex < state.jobs.length; jobIndex += 1) {
+            var job = state.jobs[jobIndex];
+            if (!Array.isArray(job.images)) {
+                job.images = [];
+                changed = true;
+                continue;
+            }
+            for (var imageIndex = 0; imageIndex < job.images.length; imageIndex += 1) {
+                var image = job.images[imageIndex];
+                if (typeof image === "string" && isDataUrl(image)) {
+                    job.images[imageIndex] = await storeGeneratedImage(job.id || "legacy-" + jobIndex, image, imageIndex, job.prompt || "");
+                    changed = true;
+                } else if (typeof image === "string") {
+                    job.images[imageIndex] = {
+                        id: "",
+                        url: image,
+                        objectUrl: image,
+                        type: "",
+                        name: imageFileName(job.prompt, imageIndex, "image/png"),
+                        size: 0
+                    };
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            saveJobs();
+            await hydrateStoredImages();
+            renderResults();
+            setFeedback("已迁移旧图片历史，后续不再把大图写入 localStorage。", "ok");
+        } else {
+            await hydrateStoredImages();
+            renderResults();
+        }
+    }
+
+    function isDataUrl(value) {
+        return /^data:image\//i.test(String(value || ""));
+    }
+
+    function mimeTypeFromDataUrl(value) {
+        var match = /^data:([^;,]+)/i.exec(String(value || ""));
+        return match ? match[1].toLowerCase() : "";
+    }
+
+    function imageFileName(prompt, index, type) {
+        var ext = extensionForMime(type);
+        var slug = String(prompt || "lai-chat-image")
+            .trim()
+            .replace(/[\\/:*?"<>|]+/g, "")
+            .replace(/\s+/g, "-")
+            .slice(0, 36) || "lai-chat-image";
+        return slug + "-" + (index + 1) + "." + ext;
+    }
+
+    function extensionForMime(type) {
+        if (type === "image/jpeg") {
+            return "jpg";
+        }
+        if (type === "image/webp") {
+            return "webp";
+        }
+        return "png";
+    }
+
     function loadJobs() {
         try {
             var stored = JSON.parse(localStorage.getItem(IMAGE_KEY) || "[]");
-            return Array.isArray(stored) ? stored : [];
+            return Array.isArray(stored) ? stored.map(normalizeJob).filter(Boolean) : [];
         } catch (error) {
             return [];
         }
     }
 
     function saveJobs() {
-        localStorage.setItem(IMAGE_KEY, JSON.stringify(state.jobs));
+        var jobs = state.jobs.map(serializeJob);
+        try {
+            localStorage.setItem(IMAGE_KEY, JSON.stringify(jobs));
+        } catch (error) {
+            if (isQuotaError(error)) {
+                localStorage.setItem(IMAGE_KEY, JSON.stringify(jobs.map(stripLegacyImageData)));
+                setFeedback("图片已生成，但历史空间不足，已只保存图片元数据。请及时下载重要图片。", "warn");
+                return;
+            }
+            throw error;
+        }
+    }
+
+    function normalizeJob(job) {
+        if (!job || typeof job !== "object") {
+            return null;
+        }
+        return Object.assign({}, job, {
+            images: (job.images || []).filter(Boolean)
+        });
+    }
+
+    function serializeJob(job) {
+        return Object.assign({}, job, {
+            images: (job.images || []).map(function(image) {
+                if (typeof image === "string") {
+                    return image;
+                }
+                return {
+                    id: image.id || "",
+                    url: image.url || "",
+                    type: image.type || "",
+                    name: image.name || "",
+                    size: image.size || 0,
+                    missing: Boolean(image.missing)
+                };
+            })
+        });
+    }
+
+    function stripLegacyImageData(job) {
+        return Object.assign({}, job, {
+            images: (job.images || []).map(function(image, index) {
+                if (typeof image === "string") {
+                    return {
+                        id: "",
+                        url: "",
+                        type: mimeTypeFromDataUrl(image),
+                        name: imageFileName(job.prompt, index, mimeTypeFromDataUrl(image)),
+                        size: 0,
+                        missing: true
+                    };
+                }
+                return image;
+            })
+        });
+    }
+
+    function isQuotaError(error) {
+        return error && (
+            error.name === "QuotaExceededError" ||
+            error.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+            String(error.message || "").toLowerCase().indexOf("quota") !== -1
+        );
+    }
+
+    function pruneStoredImages() {
+        var keepIds = [];
+        state.jobs.forEach(function(job) {
+            (job.images || []).forEach(function(image) {
+                if (image && image.id) {
+                    keepIds.push(image.id);
+                }
+            });
+        });
+        mediaStore.pruneImages(keepIds).catch(function() {});
     }
 
     function updateGeneratingState() {
-        elements.generateButton.disabled = state.isGenerating;
+        var hasPreset = Boolean(state.activePreset && state.activePreset.provider);
+        elements.generateButton.disabled = state.isGenerating || !hasPreset;
         elements.generateButton.textContent = state.isGenerating ? "生成中" : "生成";
-        elements.testButton.disabled = state.isGenerating || state.isTesting;
+        elements.testButton.disabled = state.isGenerating || state.isTesting || !hasPreset;
         elements.testButton.textContent = state.isTesting ? "测试中" : "测试连接/模型";
-        elements.providerSelect.disabled = state.isGenerating || state.isTesting;
+        elements.providerSelect.disabled = state.isGenerating || state.isTesting || !state.activePreset;
         elements.presetSelect.disabled = state.isGenerating || state.isTesting;
-        elements.modelInput.disabled = state.isGenerating || state.isTesting;
+        elements.modelInput.disabled = state.isGenerating || state.isTesting || !hasPreset;
         elements.modelMenuButton.disabled = state.isGenerating || state.isTesting || !state.modelOptions.length;
         if (state.isGenerating || state.isTesting) {
             toggleModelMenu(false);

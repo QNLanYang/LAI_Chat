@@ -358,6 +358,16 @@ button {
     font-size: 13px;
 }
 
+.field-error {
+    color: var(--danger);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.field-error:empty {
+    display: none;
+}
+
 .settings input,
 .settings select,
 .settings textarea,
@@ -469,6 +479,10 @@ button {
     grid-template-columns: none !important;
     align-items: center;
     gap: 9px !important;
+}
+
+.check-row[hidden] {
+    display: none !important;
 }
 
 .check-row input {
@@ -1014,6 +1028,16 @@ button {
     gap: 8px;
 }
 
+.empty-state {
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    background: var(--panel-soft);
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.55;
+    padding: 12px;
+}
+
 .preset-item {
     min-height: 40px;
     border: 1px solid var(--line);
@@ -1030,6 +1054,35 @@ button {
     background: var(--panel-active);
     color: var(--accent-strong);
     font-weight: 700;
+}
+
+.settings-save-actions {
+    justify-content: flex-end;
+}
+
+.send-button.is-loading {
+    position: relative;
+    color: transparent;
+}
+
+.send-button.is-loading::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    margin: -8px 0 0 -8px;
+    border: 2px solid rgba(255, 255, 255, 0.48);
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .image-workbench {
@@ -1111,18 +1164,53 @@ button {
     gap: 10px;
 }
 
-.image-grid a {
+.image-frame {
+    position: relative;
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+}
+
+.image-frame a {
     display: block;
     min-width: 0;
 }
 
-.image-grid img {
+.image-frame img,
+.image-placeholder {
     display: block;
     width: 100%;
     aspect-ratio: 1;
     border: 1px solid var(--line);
     border-radius: 8px;
+}
+
+.image-frame img {
     object-fit: cover;
+}
+
+.image-placeholder {
+    display: grid;
+    place-items: center;
+    background: var(--panel-soft);
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+}
+
+.image-frame.is-missing img {
+    background: var(--panel-soft);
+}
+
+.image-download-button {
+    width: 100%;
+    justify-content: center;
+}
+
+.image-missing-label {
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
 }
 
 @media (max-width: 860px) {

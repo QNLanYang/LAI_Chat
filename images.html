@@ -13,7 +13,9 @@
     <link rel="stylesheet" href="styles.css">
     <script src="providers.js" defer></script>
     <script src="theme.js" defer></script>
+    <script src="secrets.js" defer></script>
     <script src="presets.js" defer></script>
+    <script src="media-store.js" defer></script>
     <script src="images.js" defer></script>
 </head>
 
@@ -76,6 +78,17 @@
             <section class="side-section settings">
                 <h2>参数</h2>
                 <label>
+                    <span>尺寸</span>
+                    <select id="imageSizeModeSelect">
+                        <option value="native">原生</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                </label>
+                <label id="imageNativeSizeField">
+                    <span>原生分辨率</span>
+                    <select id="imageNativeSizeSelect"></select>
+                </label>
+                <label id="imageResolutionField">
                     <span>分辨率</span>
                     <select id="imageResolutionSelect">
                         <option value="720p">720P</option>
@@ -84,7 +97,7 @@
                         <option value="4k">4K</option>
                     </select>
                 </label>
-                <label>
+                <label id="imageAspectField">
                     <span>比例</span>
                     <select id="imageAspectSelect">
                         <optgroup label="方形">
@@ -101,6 +114,14 @@
                             <option value="16:9">16:9</option>
                         </optgroup>
                     </select>
+                </label>
+                <label id="imageQualityField">
+                    <span>质量</span>
+                    <select id="imageQualitySelect"></select>
+                </label>
+                <label id="imageBackgroundField">
+                    <span>背景</span>
+                    <select id="imageBackgroundSelect"></select>
                 </label>
                 <div class="size-preview" id="imageSizePreview" aria-live="polite"></div>
                 <label>

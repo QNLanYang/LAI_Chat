@@ -2,6 +2,11 @@
     "use strict";
 
     var config = window.LocalAiConfig;
+    var secrets = window.LocalAiSecrets || {
+        normalizeApiKey: function(value) {
+            return String(value || "").trim().replace(/^Bearer\s+/i, "").trim();
+        }
+    };
     var KEYS = config.STORAGE_KEYS;
 
     function loadPresets() {
@@ -40,7 +45,11 @@
     }
 
     function setActivePreset(kind, id) {
-        localStorage.setItem(activeKey(kind), id);
+        if (id) {
+            localStorage.setItem(activeKey(kind), id);
+        } else {
+            localStorage.removeItem(activeKey(kind));
+        }
     }
 
     function upsertPreset(preset) {
@@ -69,20 +78,15 @@
         if (!target) {
             return presets;
         }
-        var sameKind = presets.filter(function(preset) {
-            return preset.kind === target.kind;
-        });
-        if (sameKind.length <= 1) {
-            throw new Error("至少保留一个同类预设。");
-        }
         presets = presets.filter(function(preset) {
             return preset.id !== id;
         });
         savePresets(presets);
         if (localStorage.getItem(activeKey(target.kind)) === id) {
-            setActivePreset(target.kind, presets.find(function(preset) {
+            var nextActive = presets.find(function(preset) {
                 return preset.kind === target.kind;
-            }).id);
+            });
+            setActivePreset(target.kind, nextActive ? nextActive.id : "");
         }
         return presets;
     }
@@ -139,24 +143,28 @@
             return null;
         }
         var isImage = preset.kind === "image";
-        var providerKey = preset.provider || (isImage ? "openaiImages" : "lmstudio");
+        var providerKey = preset.provider || "";
         var provider = isImage ? config.getImageProvider(providerKey) : config.getProvider(providerKey);
-        var endpoint = preset.endpoint || provider.defaultAddress || "";
+        var endpoint = preset.endpoint || "";
         if (!isImage && provider.defaultScheme === "auto" && provider.defaultAddress && config.isDefaultAddress(providerKey, endpoint)) {
             endpoint = provider.defaultAddress;
         }
         var normalized = {
             id: preset.id || preset.kind + "-" + Date.now(),
-            name: preset.name || provider.label,
+            name: preset.name || (isImage ? "新图片预设" : "新聊天预设"),
             kind: isImage ? "image" : "chat",
             provider: providerKey,
             endpoint: endpoint,
-            apiKey: preset.apiKey || "",
-            model: preset.model || provider.defaultModel || "",
+            apiKey: secrets.normalizeApiKey(preset.apiKey),
+            model: preset.model || "",
             openaiApi: preset.openaiApi || "chat",
             responseImageGeneration: Boolean(preset.responseImageGeneration)
         };
         if (isImage) {
+            normalized.sizeMode = preset.sizeMode === "custom" ? "custom" : "native";
+            normalized.nativeSize = isValidNativeSize(preset.nativeSize) ? preset.nativeSize : "auto";
+            normalized.imageQuality = isValidImageQuality(preset.imageQuality) ? preset.imageQuality : "auto";
+            normalized.imageBackground = isValidImageBackground(preset.imageBackground) ? preset.imageBackground : "auto";
             normalized.resolution = normalizeImageResolution(preset.resolution);
             normalized.aspect = isValidAspect(preset.aspect) ? preset.aspect : "1:1";
         }
@@ -179,6 +187,18 @@
 
     function isValidAspect(value) {
         return ["1:1", "3:4", "2:3", "9:16", "4:3", "3:2", "16:9"].indexOf(value) !== -1;
+    }
+
+    function isValidNativeSize(value) {
+        return ["auto", "1024x1024", "1536x1024", "1024x1536"].indexOf(value) !== -1;
+    }
+
+    function isValidImageQuality(value) {
+        return ["auto", "low", "medium", "high"].indexOf(value) !== -1;
+    }
+
+    function isValidImageBackground(value) {
+        return ["auto", "transparent", "opaque"].indexOf(value) !== -1;
     }
 
     function readJson(key, fallback) {

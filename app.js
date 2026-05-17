@@ -4,6 +4,7 @@
     var config = window.LocalAiConfig;
     var markdown = window.LocalAiMarkdown;
     var presetsApi = window.LocalAiPresets;
+    var secrets = window.LocalAiSecrets;
     var CHAT_KEY = config.STORAGE_KEYS.chats;
     var SETTINGS_KEY = config.STORAGE_KEYS.settings;
     var API_KEY = config.STORAGE_KEYS.apiKey;
@@ -378,11 +379,11 @@
         try {
             var stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
             var settings = Object.assign({}, defaultSettings, stored);
-            if (!providerDefaults[settings.provider]) {
+            if (settings.provider && !providerDefaults[settings.provider]) {
                 settings.provider = defaultSettings.provider;
                 settings.endpoint = defaultSettings.endpoint;
             }
-            if (!settings.endpoint && providerDefaults[settings.provider].defaultAddress) {
+            if (settings.provider && !settings.endpoint && providerDefaults[settings.provider].defaultAddress) {
                 settings.endpoint = providerDefaults[settings.provider].defaultAddress;
             }
             if (!settings.openaiApi) {
@@ -538,6 +539,14 @@
         state.chatPresets = presetsApi.presetsByKind("chat");
         state.activeChatPreset = presetsApi.getActivePreset("chat");
         elements.chatPresetSelect.textContent = "";
+        if (!state.chatPresets.length) {
+            var empty = document.createElement("option");
+            empty.value = "";
+            empty.textContent = "未配置预设";
+            elements.chatPresetSelect.appendChild(empty);
+            elements.chatPresetSelect.value = "";
+            return;
+        }
         state.chatPresets.forEach(function(preset) {
             var option = document.createElement("option");
             option.value = preset.id;
@@ -1163,6 +1172,8 @@
     }
 
     function updateSendState() {
+        var provider = config.getProvider(state.settings.provider);
+        var hasProvider = provider.mode !== "none";
         elements.sendButton.disabled = state.isSending;
         elements.stopButton.disabled = !state.isSending;
         elements.promptInput.disabled = state.isSending;
@@ -1196,9 +1207,10 @@
         if ((!prompt && !images.length) || state.isSending) {
             return;
         }
-        if (!state.settings.endpoint) {
-            setStatus("请先填写地址", "error");
-            setFeedback("请先填写服务地址。", "error");
+        var connectionValidation = validateConnectionConfig({ requireModel: true });
+        if (!connectionValidation.valid) {
+            setStatus(connectionValidation.status, "error");
+            setFeedback(connectionValidation.message, connectionValidation.tone || "error");
             return;
         }
         if (!state.settings.model) {
@@ -2319,7 +2331,7 @@
         if (options.json) {
             headers["Content-Type"] = "application/json";
         }
-        var apiKey = elements.apiKeyInput.value.trim();
+        var apiKey = secrets.apiKeyForHeader(elements.apiKeyInput.value, "API Key");
         if (apiKey && options.auth === "bearer") {
             headers.Authorization = "Bearer " + apiKey;
         } else if (apiKey && options.auth === "x-api-key") {
@@ -2606,6 +2618,12 @@
         normalizeEndpointInput();
         syncSettingsFromForm();
         var provider = config.getProvider(state.settings.provider);
+        var validation = validateConnectionConfig({ requireModel: false });
+        if (!validation.valid) {
+            setStatus(validation.status, "error");
+            setFeedback(validation.message, validation.tone || "error");
+            return [];
+        }
         var modelEndpoint = modelsEndpointFor(provider);
         if (showStatus) {
             state.isLoadingModels = true;
@@ -2644,6 +2662,38 @@
                 updateSendState();
             }
         }
+    }
+
+    function validateConnectionConfig(options) {
+        options = options || {};
+        var provider = config.getProvider(state.settings.provider);
+        if (provider.mode === "none" || !state.settings.provider) {
+            return {
+                valid: false,
+                status: "未配置 Provider",
+                message: "当前还未配置 Provider 信息。请先在设置页创建并选择一个预设。"
+            };
+        }
+        if (!state.settings.endpoint) {
+            return {
+                valid: false,
+                status: "请先填写地址",
+                message: "当前预设还没有填写服务地址。请到设置页补全地址。"
+            };
+        }
+        if (options.requireModel && !state.settings.model) {
+            return {
+                valid: false,
+                status: "请先填写模型名",
+                message: "当前预设还没有选择模型。请先测试连接/刷新模型，或手动填写模型名。",
+                tone: "warn"
+            };
+        }
+        return {
+            valid: true,
+            status: "",
+            message: ""
+        };
     }
 
     function modelsEndpointFor(provider) {

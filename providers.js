@@ -12,6 +12,31 @@
         theme: "qnlanyang.localAi.theme.v1"
     };
 
+    var EMPTY_CHAT_PROVIDER = {
+        label: "未配置",
+        mode: "none",
+        defaultAddress: "",
+        defaultScheme: "https",
+        modelsPath: "",
+        chatPath: "",
+        supportsResponses: false
+    };
+
+    var EMPTY_IMAGE_PROVIDER = {
+        label: "未配置",
+        mode: "none",
+        defaultAddress: "",
+        defaultScheme: "https",
+        modelsPath: "",
+        generationPath: "",
+        editPath: "",
+        defaultModel: "",
+        imageSizeMode: "prompt",
+        nativeSizes: [],
+        qualityOptions: [],
+        backgroundOptions: []
+    };
+
     var PROVIDERS = {
         lmstudio: {
             label: "LM Studio REST v1",
@@ -72,7 +97,10 @@
             generationPath: "/images/generations",
             editPath: "/images/edits",
             defaultModel: "gpt-image-2",
-            imageSizeMode: "model"
+            imageSizeMode: "model",
+            nativeSizes: ["auto", "1024x1024", "1536x1024", "1024x1536"],
+            qualityOptions: ["auto", "low", "medium", "high"],
+            backgroundOptions: ["auto", "transparent", "opaque"]
         },
         geminiImages: {
             label: "Gemini / Nano Banana",
@@ -82,7 +110,10 @@
             modelsPath: "/models",
             generationPath: "/models/{model}:generateContent",
             defaultModel: "gemini-2.5-flash-image",
-            imageSizeMode: "prompt"
+            imageSizeMode: "prompt",
+            nativeSizes: [],
+            qualityOptions: [],
+            backgroundOptions: []
         },
         customOpenAiImages: {
             label: "OpenAI Images-compatible",
@@ -94,13 +125,16 @@
             generationPath: "/images/generations",
             editPath: "/images/edits",
             defaultModel: "gpt-image-2",
-            imageSizeMode: "model"
+            imageSizeMode: "model",
+            nativeSizes: ["auto", "1024x1024", "1536x1024", "1024x1536"],
+            qualityOptions: ["auto", "low", "medium", "high"],
+            backgroundOptions: ["auto", "transparent", "opaque"]
         }
     };
 
     var DEFAULT_SETTINGS = {
-        provider: "lmstudio",
-        endpoint: PROVIDERS.lmstudio.defaultAddress,
+        provider: "",
+        endpoint: "",
         model: "",
         openaiApi: "chat",
         reasoning: "auto",
@@ -119,31 +153,11 @@
 
     var DEFAULT_CHAT_PRESETS = [
         {
-            id: "chat-lmstudio-rest",
-            name: "LM Studio REST",
+            id: "chat-unconfigured",
+            name: "未配置聊天预设",
             kind: "chat",
-            provider: "lmstudio",
-            endpoint: PROVIDERS.lmstudio.defaultAddress,
-            apiKey: "",
-            model: "",
-            openaiApi: "chat"
-        },
-        {
-            id: "chat-openai-compatible",
-            name: "OpenAI-compatible",
-            kind: "chat",
-            provider: "openai",
+            provider: "",
             endpoint: "",
-            apiKey: "",
-            model: "",
-            openaiApi: "chat"
-        },
-        {
-            id: "chat-gemini-openai-compatible",
-            name: "Gemini OpenAI-compatible",
-            kind: "chat",
-            provider: "gemini",
-            endpoint: PROVIDERS.gemini.defaultAddress,
             apiKey: "",
             model: "",
             openaiApi: "chat"
@@ -152,35 +166,28 @@
 
     var DEFAULT_IMAGE_PRESETS = [
         {
-            id: "image-openai",
-            name: "OpenAI Images",
+            id: "image-unconfigured",
+            name: "未配置图片预设",
             kind: "image",
-            provider: "openaiImages",
-            endpoint: IMAGE_PROVIDERS.openaiImages.defaultAddress,
+            provider: "",
+            endpoint: "",
             apiKey: "",
-            model: IMAGE_PROVIDERS.openaiImages.defaultModel,
-            resolution: "720p",
-            aspect: "1:1"
-        },
-        {
-            id: "image-gemini",
-            name: "Gemini / Nano Banana",
-            kind: "image",
-            provider: "geminiImages",
-            endpoint: IMAGE_PROVIDERS.geminiImages.defaultAddress,
-            apiKey: "",
-            model: IMAGE_PROVIDERS.geminiImages.defaultModel,
+            model: "",
+            sizeMode: "native",
+            nativeSize: "auto",
+            imageQuality: "auto",
+            imageBackground: "auto",
             resolution: "720p",
             aspect: "1:1"
         }
     ];
 
     function getProvider(key) {
-        return PROVIDERS[key] || PROVIDERS.lmstudio;
+        return PROVIDERS[key] || EMPTY_CHAT_PROVIDER;
     }
 
     function getImageProvider(key) {
-        return IMAGE_PROVIDERS[key] || IMAGE_PROVIDERS.openaiImages;
+        return IMAGE_PROVIDERS[key] || EMPTY_IMAGE_PROVIDER;
     }
 
     function hasScheme(value) {
@@ -355,6 +362,9 @@
 
     function addressPlaceholderFor(providerKey) {
         var provider = getProvider(providerKey);
+        if (provider.mode === "none") {
+            return "请先选择 Provider";
+        }
         if (provider.defaultAddress) {
             return provider.defaultAddress;
         }
@@ -363,6 +373,9 @@
 
     function imageAddressPlaceholderFor(providerKey) {
         var provider = getImageProvider(providerKey);
+        if (provider.mode === "none") {
+            return "请先选择 Provider";
+        }
         return provider.defaultAddress || "api.example.com";
     }
 
@@ -370,6 +383,8 @@
         STORAGE_KEYS: STORAGE_KEYS,
         PROVIDERS: PROVIDERS,
         IMAGE_PROVIDERS: IMAGE_PROVIDERS,
+        EMPTY_CHAT_PROVIDER: EMPTY_CHAT_PROVIDER,
+        EMPTY_IMAGE_PROVIDER: EMPTY_IMAGE_PROVIDER,
         DEFAULT_SETTINGS: DEFAULT_SETTINGS,
         DEFAULT_CHAT_PRESETS: DEFAULT_CHAT_PRESETS,
         DEFAULT_IMAGE_PRESETS: DEFAULT_IMAGE_PRESETS,
