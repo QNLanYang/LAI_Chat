@@ -18,7 +18,10 @@ LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户�
 项目目前还在早期开发阶段，不承诺稳定 API 或向前兼容。欢迎通过 GitHub issues 反馈问题，也欢迎提交 PR。
 
 ~~*如果你没有API只是想玩的话那我在 api.qnly.top 有一个OpenAI兼容端点，大部分时间只提供0.8B小参数量化降智模型**仅供体验***~~
+
 ~~*偶尔可能会上线别的大模型，但请注意一次只能加载一个模型，加载需要时间，**不要频繁切换***~~
+
+*详情请查看 [QNLY API 简要文档](https://github.com/QNLanYang/LAI_Chat/blob/main/.Self-hosted_API_docs.md)*
 
 ## 当前功能
 
