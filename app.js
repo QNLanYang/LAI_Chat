@@ -5,6 +5,7 @@
     var markdown = window.LocalAiMarkdown;
     var presetsApi = window.LocalAiPresets;
     var secrets = window.LocalAiSecrets;
+    var ui = window.LocalAiUi;
     var CHAT_KEY = config.STORAGE_KEYS.chats;
     var SETTINGS_KEY = config.STORAGE_KEYS.settings;
     var API_KEY = config.STORAGE_KEYS.apiKey;
@@ -12,6 +13,7 @@
     var defaultSettings = config.DEFAULT_SETTINGS;
 
     var elements = {};
+    var modelPicker = null;
     var state = {
         chats: [],
         activeChatId: "",
@@ -117,6 +119,23 @@
         renderChatPresetSelect();
         elements.apiKeyInput.value = loadApiKey();
         state.endpointWasAutoFilled = config.isDefaultAddress(state.settings.provider, state.settings.endpoint);
+        modelPicker = ui.createModelPicker({
+            input: elements.modelInput,
+            button: elements.modelMenuButton,
+            menu: elements.modelMenu,
+            getActiveModel: function() {
+                return state.settings.model;
+            },
+            isDisabled: function() {
+                return state.isSending;
+            },
+            onSelect: function() {
+                syncSettingsFromForm();
+            },
+            onRender: function(models) {
+                state.modelOptions = models;
+            }
+        });
 
         bindEvents();
         updateProviderControls();
@@ -605,7 +624,7 @@
             var title = document.createElement("strong");
             title.textContent = chat.title || "新会话";
             var time = document.createElement("span");
-            time.textContent = formatTime(chat.updatedAt);
+            time.textContent = ui.formatTime(chat.updatedAt);
             button.appendChild(title);
             button.appendChild(time);
 
@@ -650,9 +669,7 @@
     }
 
     function setSidebarOpen(open) {
-        document.body.classList.toggle("is-sidebar-open", Boolean(open));
-        elements.sidebarOpenButton.setAttribute("aria-expanded", open ? "true" : "false");
-        elements.sidebarScrim.hidden = !open;
+        ui.setSidebarOpen(elements, open);
     }
 
     function renderMessages() {
@@ -1030,13 +1047,11 @@
         var chat = getActiveChat();
         if (isLmStudioRestDowngraded(chat)) {
             elements.statusText.textContent = provider.label + " · 已降级为 Responses · " + model;
-            elements.connectionPill.textContent = state.isSending ? "生成中" : "已降级为 Responses";
-            elements.connectionPill.className = "status-pill is-warn";
+            ui.setStatusPill(elements.connectionPill, state.isSending ? "生成中" : "已降级为 Responses", "warn");
             return;
         }
         elements.statusText.textContent = provider.label + " · " + model;
-        elements.connectionPill.textContent = state.isSending ? "生成中" : provider.label;
-        elements.connectionPill.className = "status-pill";
+        ui.setStatusPill(elements.connectionPill, state.isSending ? "生成中" : provider.label);
     }
 
     function updateProviderControls() {
@@ -1132,8 +1147,7 @@
     }
 
     function setFieldVisible(field, visible) {
-        field.hidden = !visible;
-        field.setAttribute("aria-hidden", visible ? "false" : "true");
+        ui.setFieldVisible(field, visible);
     }
 
     function updateRequestPreview() {
@@ -1144,24 +1158,11 @@
     }
 
     function toggleModelMenu(open) {
-        var shouldOpen = Boolean(open && state.modelOptions.length && !state.isSending);
-        elements.modelMenu.hidden = !shouldOpen;
-        elements.modelMenuButton.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+        modelPicker.toggle(open);
     }
 
     function focusFirstModelOption() {
-        var option = elements.modelMenu.querySelector(".model-option");
-        if (option) {
-            option.focus();
-        }
-    }
-
-    function selectModel(model) {
-        elements.modelInput.value = model;
-        syncSettingsFromForm();
-        renderModelOptions(state.modelOptions);
-        toggleModelMenu(false);
-        elements.modelInput.focus();
+        modelPicker.focusFirst();
     }
 
     function previewLine(text) {
@@ -2327,33 +2328,17 @@
 
     function requestHeaders(options) {
         options = options || {};
-        var headers = {};
-        if (options.json) {
-            headers["Content-Type"] = "application/json";
-        }
         var apiKey = secrets.apiKeyForHeader(elements.apiKeyInput.value, "API Key");
-        if (apiKey && options.auth === "bearer") {
-            headers.Authorization = "Bearer " + apiKey;
-        } else if (apiKey && options.auth === "x-api-key") {
-            headers["x-api-key"] = apiKey;
-        }
-        if (options.anthropicVersion) {
-            headers["anthropic-version"] = "2023-06-01";
-        }
-        return headers;
+        return ui.buildHeaders({
+            apiKey: apiKey,
+            auth: options.auth,
+            json: options.json,
+            extra: options.anthropicVersion ? { "anthropic-version": "2023-06-01" } : null
+        });
     }
 
     async function ensureOk(response) {
-        if (response.ok) {
-            return;
-        }
-        var text = "";
-        try {
-            text = await response.text();
-        } catch (error) {
-            text = response.statusText;
-        }
-        throw new Error("HTTP " + response.status + " " + text.slice(0, 260));
+        return ui.ensureOk(response);
     }
 
     function isEventStream(response) {
@@ -2723,16 +2708,16 @@
 
     function extractModelNames(provider, data) {
         if (provider.mode === "ollama") {
-            return (data.models || []).map(function(model) { return model.name; });
+            return ui.modelNamesFromItems(data.models || [], "chat");
         }
         if (provider.mode === "lmstudioRest" && Array.isArray(data.models)) {
             return extractLmStudioModelNames(data.models);
         }
         if (Array.isArray(data.data)) {
-            return uniqueValues(data.data.map(modelNameFromItem).filter(isChatModelName));
+            return ui.modelNamesFromItems(data.data, "chat");
         }
         if (Array.isArray(data.models)) {
-            return uniqueValues(data.models.map(modelNameFromItem).filter(isChatModelName));
+            return ui.modelNamesFromItems(data.models, "chat");
         }
         return [];
     }
@@ -2741,7 +2726,7 @@
         var loaded = [];
         var available = [];
         models.forEach(function(model) {
-            if (!model || model.type === "embedding") {
+            if (!ui.isChatModelItem(model)) {
                 return;
             }
             if (Array.isArray(model.loaded_instances) && model.loaded_instances.length) {
@@ -2752,80 +2737,13 @@
                 });
                 return;
             }
-            available.push(modelNameFromItem(model));
+            available.push(ui.modelNameFromItem(model));
         });
-        return uniqueValues(loaded.concat(available).filter(isChatModelName));
-    }
-
-    function modelNameFromItem(model) {
-        if (typeof model === "string") {
-            return model;
-        }
-        if (!model) {
-            return "";
-        }
-        if (Array.isArray(model.loaded_instances) && model.loaded_instances.length && model.loaded_instances[0].id) {
-            return model.loaded_instances[0].id;
-        }
-        return model.id || model.name || model.key || model.display_name || "";
-    }
-
-    function uniqueValues(values) {
-        var seen = {};
-        return values.filter(function(value) {
-            if (seen[value]) {
-                return false;
-            }
-            seen[value] = true;
-            return true;
-        });
-    }
-
-    function isChatModelName(value) {
-        return Boolean(value) && value.toLowerCase().indexOf("embedding") === -1 && value.toLowerCase().indexOf("embed") === -1;
+        return ui.uniqueValues(loaded.concat(available));
     }
 
     function renderModelOptions(models) {
-        state.modelOptions = models.slice();
-        elements.modelMenu.textContent = "";
-        models.forEach(function(model) {
-            var option = document.createElement("button");
-            option.type = "button";
-            option.className = "model-option" + (model === state.settings.model ? " is-selected" : "");
-            option.textContent = model;
-            option.addEventListener("click", function() {
-                selectModel(model);
-            });
-            option.addEventListener("keydown", function(event) {
-                var current = state.modelOptions.indexOf(model);
-                if (event.key === "ArrowDown") {
-                    event.preventDefault();
-                    focusModelOption(current + 1);
-                } else if (event.key === "ArrowUp") {
-                    event.preventDefault();
-                    focusModelOption(current - 1);
-                } else if (event.key === "Escape") {
-                    event.preventDefault();
-                    toggleModelMenu(false);
-                    elements.modelInput.focus();
-                }
-            });
-            elements.modelMenu.appendChild(option);
-        });
-        elements.modelInput.placeholder = models.length ? "选择或输入模型名" : "手动输入模型名";
-        elements.modelMenuButton.disabled = state.isSending || !models.length;
-        if (!models.length) {
-            toggleModelMenu(false);
-        }
-    }
-
-    function focusModelOption(index) {
-        var options = elements.modelMenu.querySelectorAll(".model-option");
-        if (!options.length) {
-            return;
-        }
-        var next = (index + options.length) % options.length;
-        options[next].focus();
+        modelPicker.render(models);
     }
 
     function stopGeneration() {
@@ -2871,72 +2789,39 @@
     }
 
     function applyStatus(text, tone) {
-        elements.connectionPill.textContent = text;
-        elements.connectionPill.className = "status-pill" + (tone === "warn" ? " is-warn" : "") + (tone === "error" ? " is-error" : "");
+        ui.setStatusPill(elements.connectionPill, text, tone);
         elements.statusText.textContent = text;
     }
 
     function setFeedback(text, tone) {
-        elements.connectionFeedback.textContent = text;
-        elements.connectionFeedback.className = "connection-feedback" + (tone ? " is-" + tone : "");
+        ui.setToneText(elements.connectionFeedback, "connection-feedback", text, tone);
     }
 
     function clearFeedback() {
-        elements.connectionFeedback.textContent = "";
-        elements.connectionFeedback.className = "connection-feedback";
+        ui.clearToneText(elements.connectionFeedback, "connection-feedback");
     }
 
     function setButtonLoading(button, loading, loadingText, normalText) {
-        button.disabled = loading;
-        button.textContent = loading ? loadingText : normalText;
+        ui.setButtonLoading(button, loading, loadingText, normalText);
     }
 
     async function addImageFiles(fileList) {
-        var files = Array.from(fileList || []).filter(function(file) {
-            return file.type.indexOf("image/") === 0;
-        });
-        if (!files.length) {
+        var loaded = await ui.readImageFiles(fileList);
+        if (!loaded.length) {
             return;
         }
-        var loaded = await Promise.all(files.map(readImageFile));
         state.pendingImages = state.pendingImages.concat(loaded);
         renderPendingImages();
         setFeedback("已添加 " + loaded.length + " 张图片。", "ok");
     }
 
     async function handlePromptPaste(event) {
-        var items = Array.from((event.clipboardData && event.clipboardData.items) || []);
-        var files = items
-            .filter(function(item) {
-                return item.kind === "file" && item.type.indexOf("image/") === 0;
-            })
-            .map(function(item) {
-                return item.getAsFile();
-            })
-            .filter(Boolean);
+        var files = ui.imageFilesFromPaste(event);
         if (!files.length) {
             return;
         }
         event.preventDefault();
         await addImageFiles(files);
-    }
-
-    function readImageFile(file) {
-        return new Promise(function(resolve, reject) {
-            var reader = new FileReader();
-            reader.onload = function() {
-                resolve({
-                    name: file.name,
-                    type: file.type || "image/png",
-                    size: file.size,
-                    dataUrl: String(reader.result || "")
-                });
-            };
-            reader.onerror = function() {
-                reject(new Error("图片读取失败: " + file.name));
-            };
-            reader.readAsDataURL(file);
-        });
     }
 
     function createMessage(role, content, images) {
@@ -2967,19 +2852,6 @@
             return "AI";
         }
         return role;
-    }
-
-    function formatTime(value) {
-        var date = new Date(value);
-        if (Number.isNaN(date.getTime())) {
-            return "";
-        }
-        return date.toLocaleString("zh-CN", {
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit"
-        });
     }
 
     function optionalNumberValue(value) {
@@ -3044,10 +2916,6 @@
     }
 
     function explainError(error) {
-        var message = error && error.message ? error.message : String(error);
-        if (message === "Failed to fetch") {
-            return "无法访问端点。请确认本地服务已启动，并允许当前页面跨域访问。";
-        }
-        return message;
+        return ui.explainError(error, { localService: true });
     }
 })();

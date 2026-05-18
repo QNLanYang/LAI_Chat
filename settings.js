@@ -4,6 +4,7 @@
     var config = window.LocalAiConfig;
     var presetsApi = window.LocalAiPresets;
     var secrets = window.LocalAiSecrets;
+    var ui = window.LocalAiUi;
     var elements = {};
     var state = {
         kind: "chat",
@@ -384,8 +385,7 @@
     }
 
     function setVisible(element, visible) {
-        element.hidden = !visible;
-        element.setAttribute("aria-hidden", visible ? "false" : "true");
+        ui.setFieldVisible(element, visible);
     }
 
     function setFieldError(element, text) {
@@ -473,8 +473,7 @@
     }
 
     function setFeedback(text, tone) {
-        elements.settingsFeedback.textContent = text;
-        elements.settingsFeedback.className = "connection-feedback" + (tone ? " is-" + tone : "");
+        ui.setToneText(elements.settingsFeedback, "connection-feedback", text, tone);
     }
 
     function delay(ms) {

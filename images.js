@@ -5,9 +5,11 @@
     var presetsApi = window.LocalAiPresets;
     var secrets = window.LocalAiSecrets;
     var mediaStore = window.LocalAiMediaStore;
+    var ui = window.LocalAiUi;
     var IMAGE_KEY = config.STORAGE_KEYS.imageJobs;
 
     var elements = {};
+    var modelPicker = null;
     var state = {
         presets: [],
         activePreset: null,
@@ -66,6 +68,23 @@
         state.jobs = loadJobs();
         renderProviderOptions();
         loadActivePreset();
+        modelPicker = ui.createModelPicker({
+            input: elements.modelInput,
+            button: elements.modelMenuButton,
+            menu: elements.modelMenu,
+            getActiveModel: function() {
+                return state.activePreset ? state.activePreset.model : "";
+            },
+            isDisabled: function() {
+                return state.isGenerating || state.isTesting;
+            },
+            onSelect: function() {
+                syncPresetFromForm();
+            },
+            onRender: function(models) {
+                state.modelOptions = models;
+            }
+        });
         bindEvents();
         renderAll();
         migrateLegacyJobs().catch(function(error) {
@@ -203,9 +222,7 @@
     }
 
     function setSidebarOpen(open) {
-        document.body.classList.toggle("is-sidebar-open", Boolean(open));
-        elements.sidebarOpenButton.setAttribute("aria-expanded", open ? "true" : "false");
-        elements.sidebarScrim.hidden = !open;
+        ui.setSidebarOpen(elements, open);
     }
 
     function loadActivePreset() {
@@ -353,15 +370,13 @@
         if (!state.activePreset) {
             elements.providerLabel.textContent = "未配置";
             elements.statusText.textContent = "未配置 Provider";
-            elements.statusPill.textContent = "未配置";
-            elements.statusPill.className = "status-pill is-warn";
+            ui.setStatusPill(elements.statusPill, "未配置", "warn");
             return;
         }
         var provider = config.getImageProvider(state.activePreset.provider);
         elements.providerLabel.textContent = provider.label;
         elements.statusText.textContent = provider.label + " · " + (state.activePreset.model || provider.defaultModel || "未选择模型");
-        elements.statusPill.textContent = state.isGenerating ? "生成中" : provider.label;
-        elements.statusPill.className = "status-pill";
+        ui.setStatusPill(elements.statusPill, state.isGenerating ? "生成中" : provider.label);
     }
 
     async function generateImage(event) {
@@ -557,24 +572,23 @@
     }
 
     function imageHeaders(options) {
-        var headers = {};
-        if (options.json) {
-            headers["Content-Type"] = "application/json";
-        }
+        options = options || {};
         var apiKey = secrets.apiKeyForHeader(state.activePreset.apiKey, "API Key");
-        if (options.bearer && apiKey) {
-            headers.Authorization = "Bearer " + apiKey;
-        }
-        return headers;
+        return ui.buildHeaders({
+            apiKey: apiKey,
+            auth: options.bearer ? "bearer" : "",
+            json: options.json
+        });
     }
 
     function imageModelHeaders() {
         var provider = config.getImageProvider(state.activePreset.provider);
         var apiKey = secrets.apiKeyForHeader(state.activePreset.apiKey, "API Key");
         if (provider.mode === "geminiImages") {
-            return apiKey ? {
-                "x-goog-api-key": apiKey
-            } : {};
+            return ui.buildHeaders({
+                apiKey: apiKey,
+                auth: "x-goog-api-key"
+            });
         }
         return imageHeaders({ bearer: true });
     }
@@ -584,81 +598,24 @@
             return [];
         }
         if (Array.isArray(data.data)) {
-            return data.data.map(function(item) {
-                return typeof item === "string" ? item : item && (item.id || item.name);
-            }).filter(Boolean);
+            return ui.modelNamesFromItems(data.data, "image");
         }
         if (Array.isArray(data.models)) {
-            return data.models.map(function(item) {
-                return typeof item === "string" ? item : item && (item.id || item.name);
-            }).filter(Boolean);
+            return ui.modelNamesFromItems(data.models, "image");
         }
         return [];
     }
 
     function renderModelOptions(models) {
-        state.modelOptions = uniqueValues((models || []).filter(Boolean));
-        elements.modelMenu.textContent = "";
-        var activeModel = state.activePreset ? state.activePreset.model : "";
-        state.modelOptions.forEach(function(model) {
-            var option = document.createElement("button");
-            option.type = "button";
-            option.className = "model-option" + (model === activeModel ? " is-selected" : "");
-            option.textContent = model;
-            option.addEventListener("click", function() {
-                selectModel(model);
-            });
-            option.addEventListener("keydown", function(event) {
-                if (event.key === "ArrowDown") {
-                    event.preventDefault();
-                    var next = option.nextElementSibling || elements.modelMenu.firstElementChild;
-                    next.focus();
-                }
-                if (event.key === "ArrowUp") {
-                    event.preventDefault();
-                    var previous = option.previousElementSibling || elements.modelMenu.lastElementChild;
-                    previous.focus();
-                }
-                if (event.key === "Escape") {
-                    toggleModelMenu(false);
-                    elements.modelInput.focus();
-                }
-            });
-            elements.modelMenu.appendChild(option);
-        });
-        elements.modelInput.placeholder = state.modelOptions.length ? "选择或输入模型名" : "手动输入模型名";
-        elements.modelMenuButton.disabled = state.isGenerating || state.isTesting || !state.modelOptions.length;
-        if (!state.modelOptions.length) {
-            toggleModelMenu(false);
-        }
-    }
-
-    function uniqueValues(values) {
-        return Array.from(new Set(values));
+        modelPicker.render(models);
     }
 
     function toggleModelMenu(open) {
-        var shouldOpen = Boolean(open && state.modelOptions.length && !state.isGenerating && !state.isTesting);
-        elements.modelMenu.hidden = !shouldOpen;
-        elements.modelMenuButton.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+        modelPicker.toggle(open);
     }
 
     function focusFirstModelOption() {
-        var option = elements.modelMenu.querySelector(".model-option");
-        if (option) {
-            option.focus();
-        }
-    }
-
-    function selectModel(model) {
-        if (!state.activePreset) {
-            return;
-        }
-        elements.modelInput.value = model;
-        syncPresetFromForm();
-        renderModelOptions(state.modelOptions);
-        toggleModelMenu(false);
-        elements.modelInput.focus();
+        modelPicker.focusFirst();
     }
 
     function extractOpenAiImages(data) {
@@ -1002,8 +959,7 @@
     }
 
     function setFieldVisible(field, visible) {
-        field.hidden = !visible;
-        field.setAttribute("aria-hidden", visible ? "false" : "true");
+        ui.setFieldVisible(field, visible);
     }
 
     function renderReferences() {
@@ -1049,7 +1005,7 @@
             article.className = "image-job";
             var meta = document.createElement("div");
             meta.className = "image-job-meta";
-            meta.textContent = job.model + " · " + formatTime(job.createdAt);
+            meta.textContent = job.model + " · " + ui.formatTime(job.createdAt);
             var prompt = document.createElement("p");
             prompt.textContent = job.prompt;
             var grid = document.createElement("div");
@@ -1103,48 +1059,23 @@
     }
 
     async function addReferenceFiles(fileList) {
-        var files = Array.from(fileList || []).filter(function(file) {
-            return file.type.indexOf("image/") === 0;
-        });
-        if (!files.length) {
+        var loaded = await ui.readImageFiles(fileList);
+        if (!loaded.length) {
             return;
         }
-        state.references = state.references.concat(await Promise.all(files.map(readImageFile)));
+        state.references = state.references.concat(loaded);
         renderReferences();
         updateRequestPreview();
-        setFeedback("已添加 " + files.length + " 张参考图。", "ok");
+        setFeedback("已添加 " + loaded.length + " 张参考图。", "ok");
     }
 
     async function handlePaste(event) {
-        var items = Array.from((event.clipboardData && event.clipboardData.items) || []);
-        var files = items.filter(function(item) {
-            return item.kind === "file" && item.type.indexOf("image/") === 0;
-        }).map(function(item) {
-            return item.getAsFile();
-        }).filter(Boolean);
+        var files = ui.imageFilesFromPaste(event);
         if (!files.length) {
             return;
         }
         event.preventDefault();
         await addReferenceFiles(files);
-    }
-
-    function readImageFile(file) {
-        return new Promise(function(resolve, reject) {
-            var reader = new FileReader();
-            reader.onload = function() {
-                resolve({
-                    name: file.name,
-                    type: file.type || "image/png",
-                    size: file.size,
-                    dataUrl: String(reader.result || "")
-                });
-            };
-            reader.onerror = function() {
-                reject(new Error("图片读取失败: " + file.name));
-            };
-            reader.readAsDataURL(file);
-        });
     }
 
     function dataUrlToBlob(dataUrl, type) {
@@ -1248,11 +1179,31 @@
     }
 
     async function downloadImage(image) {
-        var href = image.objectUrl || image.dataUrl || image.url || "";
+        var href = "";
+        if (image.objectUrl && !/^https?:\/\//i.test(image.objectUrl)) {
+            href = image.objectUrl;
+        }
+        if (!href && image.dataUrl) {
+            href = image.dataUrl;
+        }
         if (!href && image.id) {
             var record = await mediaStore.getImage(image.id);
             if (record && record.blob) {
                 href = trackObjectUrl(URL.createObjectURL(record.blob));
+            }
+        }
+        var remoteUrl = image.url || (/^https?:\/\//i.test(image.objectUrl || "") ? image.objectUrl : "");
+        if (!href && remoteUrl) {
+            try {
+                var response = await fetch(remoteUrl);
+                await ensureOk(response);
+                var blob = await response.blob();
+                href = trackObjectUrl(URL.createObjectURL(blob));
+                image.type = image.type || blob.type || "";
+                image.size = image.size || blob.size || 0;
+            } catch (error) {
+                setFeedback("浏览器无法直接下载这张远程图片，请点击缩略图打开后另存。", "warn");
+                return;
             }
         }
         if (!href) {
@@ -1262,6 +1213,7 @@
         var link = document.createElement("a");
         link.href = href;
         link.download = image.name || "lai-chat-image.png";
+        link.rel = "noreferrer";
         document.body.appendChild(link);
         link.click();
         link.remove();
@@ -1424,10 +1376,10 @@
 
     function updateGeneratingState() {
         var hasPreset = Boolean(state.activePreset && state.activePreset.provider);
+        ui.setButtonLoading(elements.generateButton, state.isGenerating, "生成中", "生成");
         elements.generateButton.disabled = state.isGenerating || !hasPreset;
-        elements.generateButton.textContent = state.isGenerating ? "生成中" : "生成";
+        ui.setButtonLoading(elements.testButton, state.isTesting, "测试中", "测试连接/模型");
         elements.testButton.disabled = state.isGenerating || state.isTesting || !hasPreset;
-        elements.testButton.textContent = state.isTesting ? "测试中" : "测试连接/模型";
         elements.providerSelect.disabled = state.isGenerating || state.isTesting || !state.activePreset;
         elements.presetSelect.disabled = state.isGenerating || state.isTesting;
         elements.modelInput.disabled = state.isGenerating || state.isTesting || !hasPreset;
@@ -1438,41 +1390,14 @@
     }
 
     function setFeedback(text, tone) {
-        elements.feedback.textContent = text;
-        elements.feedback.className = "connection-feedback" + (tone ? " is-" + tone : "");
+        ui.setToneText(elements.feedback, "connection-feedback", text, tone);
     }
 
     async function ensureOk(response) {
-        if (response.ok) {
-            return;
-        }
-        var text = "";
-        try {
-            text = await response.text();
-        } catch (error) {
-            text = response.statusText;
-        }
-        throw new Error("HTTP " + response.status + " " + text.slice(0, 260));
+        return ui.ensureOk(response);
     }
 
     function explainError(error) {
-        var message = error && error.message ? error.message : String(error);
-        if (message === "Failed to fetch") {
-            return "无法访问端点。请确认服务允许当前页面跨域访问。";
-        }
-        return message;
-    }
-
-    function formatTime(value) {
-        var date = new Date(value);
-        if (Number.isNaN(date.getTime())) {
-            return "";
-        }
-        return date.toLocaleString("zh-CN", {
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit"
-        });
+        return ui.explainError(error);
     }
 })();
