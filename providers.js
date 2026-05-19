@@ -100,7 +100,9 @@
             imageSizeMode: "model",
             nativeSizes: ["auto", "1024x1024", "1536x1024", "1024x1536"],
             qualityOptions: ["auto", "low", "medium", "high"],
-            backgroundOptions: ["auto", "transparent", "opaque"]
+            backgroundOptions: ["auto", "transparent", "opaque"],
+            outputFormatOptions: ["png", "jpeg", "webp"],
+            moderationOptions: ["auto", "low"]
         },
         geminiImages: {
             label: "Gemini / Nano Banana",
@@ -113,7 +115,9 @@
             imageSizeMode: "prompt",
             nativeSizes: [],
             qualityOptions: [],
-            backgroundOptions: []
+            backgroundOptions: [],
+            outputFormatOptions: [],
+            moderationOptions: []
         },
         customOpenAiImages: {
             label: "OpenAI Images-compatible",
@@ -128,7 +132,9 @@
             imageSizeMode: "model",
             nativeSizes: ["auto", "1024x1024", "1536x1024", "1024x1536"],
             qualityOptions: ["auto", "low", "medium", "high"],
-            backgroundOptions: ["auto", "transparent", "opaque"]
+            backgroundOptions: ["auto", "transparent", "opaque"],
+            outputFormatOptions: ["png", "jpeg", "webp"],
+            moderationOptions: ["auto", "low"]
         }
     };
 
@@ -177,6 +183,11 @@
             nativeSize: "auto",
             imageQuality: "auto",
             imageBackground: "auto",
+            outputFormat: "png",
+            outputCompression: 100,
+            imageStream: false,
+            partialImages: null,
+            moderation: "auto",
             resolution: "720p",
             aspect: "1:1"
         }

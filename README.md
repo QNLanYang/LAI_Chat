@@ -10,12 +10,20 @@ LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户�
 - 本地 LM Studio / Ollama 用户可以直接在浏览器里连接本机服务。
 - OpenAI-compatible / Anthropic-compatible 服务可以手动填写地址和 API Key。
 - 聊天记录、预设和非敏感设置保存在浏览器 `localStorage`。
-- API Key 也只保存在浏览器本地的 provider 预设里，不会上传到任何项目服务器。~~（因为纯静态页面根本没有服务器这说）~~
+- API Key 也只保存在浏览器本地的 provider 预设里，不会上传到任何项目服务器。
+~~（因为纯静态页面根本没有服务器这说）~~
 - 所有请求都由用户浏览器直接发往用户配置的 API 端点。
 
-项目当前使用 GPT-image-2 生成的字标作为页面品牌标识，并提供 favicon / touch icon 资源~~（有点粗糙，以后会打磨一下）~~。
+项目当前使用 GPT-image-2 生成的字标作为页面品牌标识，并提供 favicon / touch icon 资源
+~~（有点粗糙，以后会打磨一下）~~。
 
-项目目前还在早期开发阶段，不承诺稳定 API 或向前兼容。欢迎通过 GitHub issues 反馈问题，也欢迎提交 PR。
+> [!NOTE]
+>
+> 项目目前还在早期开发阶段，不承诺稳定 API 或向前兼容。
+>
+> 当前版本：0.1.0-alpha.3，变更记录见 [CHANGELOG](https://github.com/QNLanYang/LAI_Chat/blob/main/CHANGELOG.md)。
+>
+> 欢迎通过 GitHub issues 反馈问题，也欢迎提交 PR。
 
 ~~*如果你没有API只是想玩的话那我在 api.qnly.top 有一个OpenAI兼容端点，大部分时间只提供0.8B小参数量化降智模型**仅供体验***~~
 
@@ -30,11 +38,12 @@ LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户�
 - 支持 LM Studio REST v1、Ollama、OpenAI-compatible、Gemini OpenAI-compatible、Anthropic-compatible。
 - 支持 OpenAI Chat Completions 和 Responses 两种兼容接口。
 - 支持 Responses 内置 `image_generation` 工具，可在支持的接口中通过聊天触发图片生成。
-- 支持模型列表读取、连接测试、流式输出和停止生成。
+- 支持模型列表读取、连接测试、流式输出和停止生成，并在上游回传模型 id 与请求不一致时提示。
 - 支持 Markdown 渲染、推理块展示和折叠。
 - 支持图片输入，包含文件选择和粘贴图片。
 - 支持编辑、删除、重新生成和从某条消息后继续。
-- 支持基础图片生成页面，包括 OpenAI Images-compatible 和 Gemini / Nano Banana 类接口，并提供模型列表、任务历史、原生/自定义尺寸、质量和背景参数。
+- 支持基础图片生成页面，包括 OpenAI Images-compatible 和 Gemini / Nano Banana 类接口，并提供模型列表、任务历史、原生/自定义尺寸、质量、背景、输出格式、压缩、审核和预览个数参数。
+- 支持 OpenAI Images 标准流式图片响应。
 - 支持浅色 / 深色模式。
 - 支持移动端侧边栏布局和自定义滚动条。
 
@@ -66,12 +75,13 @@ LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户�
 
 图片生成页面使用方式类似：进入“图片”，选择图片 Provider 预设，填写地址、模型和 API Key，点击“测试连接/模型”，再输入提示词生成图片。
 图片尺寸默认使用“原生”模式，只显示当前模型/API 标准支持的尺寸。OpenAI GPT image 系列默认提供 `auto`、`1024x1024`、`1536x1024`、`1024x1536`；`dall-e-2` / `dall-e-3` 会按各自旧接口尺寸收敛。
-切换到“自定义”后，可以用 720P、1080P、2K、4K 和画幅比例生成目标像素尺寸。`gpt-image-2` 会直接发送符合 16 倍数约束的 `WIDTHxHEIGHT`，并通过 API 参数传递 `size`、`quality` 和 `background`，不会额外污染提示词。
+切换到“自定义”后，可以用 720P、1080P、2K、4K 和画幅比例生成目标像素尺寸。自定义尺寸会被约束到最长边不超过 3840px、宽高均为 16 的倍数、长短边比例不超过 3:1、总像素在 655360 到 8294400 之间；超过 2560x1440 的 2K 以上输出会提示仍属实验性，效果可能不稳定。
+`gpt-image-2` 会直接发送符合约束的 `WIDTHxHEIGHT`，并通过 API 参数传递 `size`、`quality`、输出格式、压缩、审核和预览个数，不会额外污染提示词。预览个数为 `0` 时不启用流式输出；`1-3` 时会发送 `stream: true` 和对应的 `partial_images`。
 
 ## 后续计划
 
-- 完善图片生成高级参数，继续覆盖输出格式、压缩、流式预览等 OpenAI Images 标准选项。
-- 增加面向第三方兼容图片 API 的参数映射和能力检测。
+- 继续打磨图片请求的状态提示、下载兼容和流式预览体验。
+- 增加更完整的第三方兼容图片 API 参数映射和能力检测。
 - 增加更完整的 provider 能力检测和错误 fallback。
 - 优化长上下文会话管理、消息分支和会话搜索。
 - 增加导入/导出 provider 预设。

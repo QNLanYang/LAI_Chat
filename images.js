@@ -18,7 +18,8 @@
         modelOptions: [],
         objectUrls: [],
         isGenerating: false,
-        isTesting: false
+        isTesting: false,
+        lastResponseWarnings: []
     };
 
     document.addEventListener("DOMContentLoaded", init);
@@ -50,6 +51,14 @@
             qualitySelect: document.getElementById("imageQualitySelect"),
             backgroundField: document.getElementById("imageBackgroundField"),
             backgroundSelect: document.getElementById("imageBackgroundSelect"),
+            outputFormatField: document.getElementById("imageOutputFormatField"),
+            outputFormatSelect: document.getElementById("imageOutputFormatSelect"),
+            outputCompressionField: document.getElementById("imageOutputCompressionField"),
+            outputCompressionInput: document.getElementById("imageOutputCompressionInput"),
+            moderationField: document.getElementById("imageModerationField"),
+            moderationSelect: document.getElementById("imageModerationSelect"),
+            partialImagesField: document.getElementById("imagePartialImagesField"),
+            partialImagesSelect: document.getElementById("imagePartialImagesSelect"),
             sizePreview: document.getElementById("imageSizePreview"),
             countInput: document.getElementById("imageCountInput"),
             providerLabel: document.getElementById("imageProviderLabel"),
@@ -218,6 +227,11 @@
         elements.aspectSelect.addEventListener("change", syncPresetFromForm);
         elements.qualitySelect.addEventListener("change", syncPresetFromForm);
         elements.backgroundSelect.addEventListener("change", syncPresetFromForm);
+        elements.outputFormatSelect.addEventListener("change", syncPresetFromForm);
+        elements.outputCompressionInput.addEventListener("input", syncPresetFromForm);
+        elements.outputCompressionInput.addEventListener("change", syncPresetFromForm);
+        elements.moderationSelect.addEventListener("change", syncPresetFromForm);
+        elements.partialImagesSelect.addEventListener("change", syncPresetFromForm);
         window.addEventListener("beforeunload", revokeObjectUrls);
     }
 
@@ -289,6 +303,10 @@
             elements.aspectSelect.value = "1:1";
             elements.qualitySelect.value = "auto";
             elements.backgroundSelect.value = "auto";
+            elements.outputFormatSelect.value = "png";
+            elements.outputCompressionInput.value = "100";
+            elements.moderationSelect.value = "auto";
+            elements.partialImagesSelect.value = "0";
             updateSizeModeVisibility();
             return;
         }
@@ -303,11 +321,17 @@
         renderNativeSizeOptions(nativeSizesForCurrentModel(provider));
         renderQualityOptions(qualityOptionsForCurrentModel(provider));
         renderBackgroundOptions(backgroundOptionsForCurrentModel(provider));
+        elements.qualitySelect.value = validQualityOrDefault(state.activePreset.imageQuality, provider);
+        elements.backgroundSelect.value = validBackgroundOrDefault(state.activePreset.imageBackground, provider);
         elements.nativeSizeSelect.value = validNativeSizeOrDefault(state.activePreset.nativeSize, provider);
         elements.resolutionSelect.value = normalizeImageResolution(state.activePreset.resolution);
         elements.aspectSelect.value = state.activePreset.aspect || "1:1";
         elements.qualitySelect.value = validQualityOrDefault(state.activePreset.imageQuality, provider);
         elements.backgroundSelect.value = validBackgroundOrDefault(state.activePreset.imageBackground, provider);
+        elements.outputFormatSelect.value = validOutputFormatOrDefault(state.activePreset.outputFormat, provider);
+        elements.outputCompressionInput.value = String(normalizeOutputCompression(state.activePreset.outputCompression));
+        elements.moderationSelect.value = validModerationOrDefault(state.activePreset.moderation, provider);
+        elements.partialImagesSelect.value = String(normalizePartialImages(state.activePreset.partialImages) || 0);
         updateSizeModeVisibility();
         updateQualityBackgroundVisibility(provider);
     }
@@ -339,12 +363,29 @@
             elements.backgroundSelect.value || state.activePreset.imageBackground,
             provider
         );
+        state.activePreset.outputFormat = validOutputFormatOrDefault(
+            elements.outputFormatSelect.value || state.activePreset.outputFormat,
+            provider
+        );
+        state.activePreset.outputCompression = normalizeOutputCompression(elements.outputCompressionInput.value);
+        state.activePreset.moderation = validModerationOrDefault(
+            elements.moderationSelect.value || state.activePreset.moderation,
+            provider
+        );
+        state.activePreset.partialImages = supportsImageStreaming(provider) ? normalizePartialImages(elements.partialImagesSelect.value) : null;
+        state.activePreset.imageStream = Boolean(state.activePreset.partialImages);
         elements.nativeSizeSelect.value = state.activePreset.nativeSize;
+        elements.qualitySelect.value = state.activePreset.imageQuality;
         elements.backgroundSelect.value = state.activePreset.imageBackground;
+        elements.outputFormatSelect.value = state.activePreset.outputFormat;
+        elements.outputCompressionInput.value = String(state.activePreset.outputCompression);
+        elements.moderationSelect.value = state.activePreset.moderation;
+        elements.partialImagesSelect.value = String(state.activePreset.partialImages || 0);
         state.activePreset.resolution = elements.resolutionSelect.value;
         state.activePreset.aspect = elements.aspectSelect.value;
         saveActivePreset();
         updateSizeModeVisibility();
+        updateOutputControlVisibility(provider);
         updateRequestPreview();
         updateStatus();
         updateSizePreview();
@@ -401,6 +442,7 @@
         }
 
         state.isGenerating = true;
+        state.lastResponseWarnings = [];
         updateGeneratingState();
         setFeedback("正在请求 " + config.imageRequestUrlFor(state.activePreset, state.references.length ? "edit" : "generation"), "ok");
         try {
@@ -424,7 +466,7 @@
             saveJobs();
             pruneStoredImages();
             renderResults();
-            setFeedback("生成完成。", "ok");
+            setFeedback(state.lastResponseWarnings.length ? "生成完成。" + state.lastResponseWarnings.join(" ") : "生成完成。", state.lastResponseWarnings.length ? "warn" : "ok");
         } catch (error) {
             setFeedback(explainError(error), "error");
         } finally {
@@ -492,6 +534,7 @@
 
     async function requestOpenAiImageGeneration(prompt) {
         var requestSize = requestImageSize();
+        var provider = config.getImageProvider(state.activePreset.provider);
         var body = {
             model: state.activePreset.model,
             prompt: prompt,
@@ -508,17 +551,19 @@
         if (requestBackground) {
             body.background = requestBackground;
         }
+        applyOpenAiGenerationOptions(body, provider);
         var response = await fetch(config.imageRequestUrlFor(state.activePreset, "generation"), {
             method: "POST",
             headers: imageHeaders({ json: true, bearer: true }),
             body: JSON.stringify(body)
         });
         await ensureOk(response);
-        return extractOpenAiImages(await response.json());
+        return handleOpenAiImageResponse(response, body);
     }
 
     async function requestOpenAiImageEdit(prompt) {
         var requestSize = requestImageSize();
+        var provider = config.getImageProvider(state.activePreset.provider);
         var form = new FormData();
         form.append("model", state.activePreset.model);
         form.append("prompt", prompt);
@@ -534,6 +579,7 @@
         if (requestBackground) {
             form.append("background", requestBackground);
         }
+        var requestOptions = applyOpenAiEditOptions(form, provider);
         state.references.forEach(function(image, index) {
             form.append("image[]", dataUrlToBlob(image.dataUrl, image.type), image.name || "reference-" + index + ".png");
         });
@@ -543,7 +589,58 @@
             body: form
         });
         await ensureOk(response);
-        return extractOpenAiImages(await response.json());
+        return handleOpenAiImageResponse(response, requestOptions);
+    }
+
+    function applyOpenAiGenerationOptions(body, provider) {
+        var outputFormat = requestOutputFormat(provider);
+        if (outputFormat) {
+            body.output_format = outputFormat;
+        }
+        var outputCompression = requestOutputCompression(provider);
+        if (outputCompression !== null) {
+            body.output_compression = outputCompression;
+        }
+        var moderation = requestModeration(provider);
+        if (moderation) {
+            body.moderation = moderation;
+        }
+        if (requestImageStream(provider)) {
+            body.stream = true;
+            body.partial_images = requestPartialImages(provider);
+        }
+        return body;
+    }
+
+    function applyOpenAiEditOptions(form, provider) {
+        var options = {
+            model: state.activePreset.model,
+            size: requestImageSize() || "",
+            quality: requestImageQuality() || "",
+            background: requestImageBackground() || ""
+        };
+        var outputFormat = requestOutputFormat(provider);
+        if (outputFormat) {
+            form.append("output_format", outputFormat);
+            options.output_format = outputFormat;
+        }
+        var outputCompression = requestOutputCompression(provider);
+        if (outputCompression !== null) {
+            form.append("output_compression", String(outputCompression));
+            options.output_compression = outputCompression;
+        }
+        var moderation = requestModeration(provider);
+        if (moderation) {
+            form.append("moderation", moderation);
+            options.moderation = moderation;
+        }
+        if (requestImageStream(provider)) {
+            form.append("stream", "true");
+            form.append("partial_images", String(requestPartialImages(provider)));
+            options.stream = true;
+            options.partial_images = requestPartialImages(provider);
+        }
+        return options;
     }
 
     async function requestGeminiImages(prompt) {
@@ -618,15 +715,172 @@
         modelPicker.focusFirst();
     }
 
-    function extractOpenAiImages(data) {
+    async function handleOpenAiImageResponse(response, requestOptions) {
+        var contentType = response.headers.get("content-type") || "";
+        if (contentType.indexOf("text/event-stream") !== -1) {
+            return extractOpenAiStreamImages(response, requestOptions);
+        }
+        return extractOpenAiImages(await response.json(), requestOptions);
+    }
+
+    async function extractOpenAiStreamImages(response, requestOptions) {
+        if (!response.body || !response.body.getReader) {
+            throw new Error("当前浏览器不支持读取流式图片响应。");
+        }
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = "";
+        var images = [];
+        var finalPayload = null;
+        while (true) {
+            var chunk = await reader.read();
+            if (chunk.done) {
+                break;
+            }
+            buffer += decoder.decode(chunk.value, { stream: true });
+            var parts = buffer.split("\n\n");
+            buffer = parts.pop() || "";
+            parts.forEach(function(part) {
+                var payload = parseSsePayload(part);
+                if (!payload) {
+                    return;
+                }
+                var partial = extractOpenAiPartialImage(payload, requestOptions);
+                if (partial) {
+                    images = [partial];
+                    return;
+                }
+                var eventImages = extractOpenAiImages(payload, requestOptions, { skipWarnings: true });
+                if (eventImages.length) {
+                    images = eventImages;
+                    finalPayload = payload;
+                }
+            });
+        }
+        buffer += decoder.decode();
+        var payload = parseSsePayload(buffer);
+        if (payload) {
+            var lastImages = extractOpenAiImages(payload, requestOptions, { skipWarnings: true });
+            if (lastImages.length) {
+                images = lastImages;
+                finalPayload = payload;
+            }
+        }
+        if (finalPayload) {
+            collectOpenAiResponseWarnings(finalPayload, requestOptions);
+        } else if (requestOptions && requestOptions.stream) {
+            state.lastResponseWarnings.push("上游使用了流式响应，但没有回显可对比的最终参数。");
+        }
+        return images;
+    }
+
+    function extractOpenAiPartialImage(payload, requestOptions) {
+        var image = payload && (payload.partial_image_b64 || payload.partial_image);
+        if (!image || String(payload.type || "").toLowerCase().indexOf("partial_image") === -1) {
+            return "";
+        }
+        var type = imageTypeFromFormat(payload.output_format || requestOptions && requestOptions.output_format) || "image/png";
+        return "data:" + type + ";base64," + image;
+    }
+
+    function parseSsePayload(part) {
+        var lines = String(part || "").split(/\r?\n/);
+        var dataLines = [];
+        lines.forEach(function(line) {
+            if (line.indexOf("data:") === 0) {
+                dataLines.push(line.slice(5).trim());
+            }
+        });
+        var text = dataLines.join("\n").trim();
+        if (!text || text === "[DONE]") {
+            return null;
+        }
+        try {
+            return JSON.parse(text);
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function extractOpenAiImages(data, requestOptions, options) {
         var responseType = imageTypeFromFormat(data && data.output_format);
-        return (data.data || []).map(function(item) {
+        if (!options || !options.skipWarnings) {
+            collectOpenAiResponseWarnings(data, requestOptions);
+        }
+        return imageItemsFromOpenAiResponse(data).map(function(item) {
             var itemType = imageTypeFromFormat(item.output_format) || responseType || "image/png";
             if (item.b64_json) {
                 return "data:" + itemType + ";base64," + item.b64_json;
             }
+            if (item.image_base64 || item.b64) {
+                return "data:" + itemType + ";base64," + (item.image_base64 || item.b64);
+            }
             return item.url || "";
         }).filter(Boolean);
+    }
+
+    function imageItemsFromOpenAiResponse(data) {
+        if (!data) {
+            return [];
+        }
+        if (Array.isArray(data.data)) {
+            return data.data;
+        }
+        if (data.b64_json || data.url || data.image_base64 || data.b64) {
+            return [data];
+        }
+        if (data.result && (data.result.b64_json || data.result.url || data.result.image_base64 || data.result.b64)) {
+            return [data.result];
+        }
+        if (Array.isArray(data.output)) {
+            return data.output.filter(function(item) {
+                return item && (item.b64_json || item.url || item.image_base64 || item.b64);
+            });
+        }
+        return [];
+    }
+
+    function collectOpenAiResponseWarnings(data, requestOptions) {
+        if (!requestOptions || !data) {
+            return;
+        }
+        var responseOptions = responseOptionsFromPayload(data);
+        var comparable = ["size", "quality", "background", "output_format", "output_compression", "moderation"];
+        var mismatches = [];
+        var sawAnyOption = false;
+        comparable.forEach(function(key) {
+            if (responseOptions[key] !== undefined && responseOptions[key] !== null && responseOptions[key] !== "") {
+                sawAnyOption = true;
+            }
+            if (requestOptions[key] !== undefined &&
+                requestOptions[key] !== null &&
+                requestOptions[key] !== "" &&
+                responseOptions[key] !== undefined &&
+                responseOptions[key] !== null &&
+                responseOptions[key] !== "" &&
+                String(requestOptions[key]) !== String(responseOptions[key])) {
+                mismatches.push(key + ": " + requestOptions[key] + " -> " + responseOptions[key]);
+            }
+        });
+        if (mismatches.length) {
+            state.lastResponseWarnings.push("上游返回参数与请求不一致，可能已降级：" + mismatches.join("，") + "。");
+            return;
+        }
+        if (!sawAnyOption && (imageItemsFromOpenAiResponse(data).length || data.usage)) {
+            state.lastResponseWarnings.push("上游未回显生成参数，无法确认是否按请求执行。");
+        }
+    }
+
+    function responseOptionsFromPayload(data) {
+        var first = imageItemsFromOpenAiResponse(data)[0] || {};
+        return {
+            size: data.size || first.size,
+            quality: data.quality || first.quality,
+            background: data.background || first.background,
+            output_format: data.output_format || first.output_format,
+            output_compression: data.output_compression || first.output_compression,
+            moderation: data.moderation || first.moderation
+        };
     }
 
     function imageTypeFromFormat(format) {
@@ -662,18 +916,80 @@
         var resolution = normalizeImageResolution(elements.resolutionSelect.value);
         var aspect = elements.aspectSelect.value || "1:1";
         var preset = imageResolutionPreset(resolution);
+        var constrained = constrainedImageDimensions(preset.width, preset.height, aspect);
+        var limits = imageDimensionLimits(constrained.width, constrained.height);
+        if (limits.valid) {
+            return {
+                resolution: resolution,
+                aspect: aspect,
+                width: constrained.width,
+                height: constrained.height
+            };
+        }
+        var fallback = constrainedImageDimensions(1280, 720, aspect);
+        return {
+            resolution: resolution,
+            aspect: aspect,
+            width: fallback.width,
+            height: fallback.height
+        };
+    }
+
+    function constrainedImageDimensions(baseWidth, baseHeight, aspect) {
         var parts = aspect.split(":").map(function(value) {
             return parseInt(value, 10) || 1;
         });
         var ratioW = parts[0] || 1;
         var ratioH = parts[1] || 1;
-        var width = Math.sqrt(preset.pixels * ratioW / ratioH);
-        var height = Math.sqrt(preset.pixels * ratioH / ratioW);
-        return {
-            resolution: resolution,
-            aspect: aspect,
+        var ratio = ratioW / ratioH;
+        var pixels = baseWidth * baseHeight;
+        pixels = Math.min(8294400, Math.max(655360, pixels));
+        if (ratio > 3) {
+            ratio = 3;
+        } else if (ratio < 1 / 3) {
+            ratio = 1 / 3;
+        }
+        var width = Math.sqrt(pixels * ratio);
+        var height = Math.sqrt(pixels / ratio);
+        var maxEdge = Math.max(width, height);
+        if (maxEdge > 3840) {
+            width = width * 3840 / maxEdge;
+            height = height * 3840 / maxEdge;
+        }
+        var rounded = {
             width: floorToStep(width, 16),
             height: floorToStep(height, 16)
+        };
+        var roundedPixels = rounded.width * rounded.height;
+        while (roundedPixels > 8294400 || rounded.width > 3840 || rounded.height > 3840) {
+            rounded.width = Math.max(16, rounded.width - 16);
+            rounded.height = Math.max(16, floorToStep(rounded.width / ratio, 16));
+            roundedPixels = rounded.width * rounded.height;
+        }
+        while (roundedPixels < 655360) {
+            rounded.width += 16;
+            rounded.height = floorToStep(rounded.width / ratio, 16);
+            roundedPixels = rounded.width * rounded.height;
+            if (rounded.width > 3840 || rounded.height > 3840) {
+                break;
+            }
+        }
+        return rounded;
+    }
+
+    function imageDimensionLimits(width, height) {
+        var longEdge = Math.max(width, height);
+        var shortEdge = Math.min(width, height);
+        var pixels = width * height;
+        return {
+            valid: longEdge <= 3840 &&
+                width % 16 === 0 &&
+                height % 16 === 0 &&
+                longEdge / shortEdge <= 3 &&
+                pixels >= 655360 &&
+                pixels <= 8294400,
+            experimental: pixels > 3686400,
+            pixels: pixels
         };
     }
 
@@ -755,6 +1071,19 @@
         return provider.mode === "openaiImages" && /^gpt-image-2(?:-|$)/.test(model);
     }
 
+    function isGptImageModel(provider) {
+        var model = currentImageModel(provider);
+        return provider.mode === "openaiImages" && /^gpt-image(?:-\d+|-1|-2|$)/.test(model);
+    }
+
+    function supportsImageStreaming(provider) {
+        return isGptImageModel(provider);
+    }
+
+    function supportsOutputControls(provider) {
+        return isGptImageModel(provider);
+    }
+
     function withImageSizeInstruction(prompt) {
         if (!state.activePreset || (state.activePreset.sizeMode || "native") !== "custom") {
             return prompt || "";
@@ -791,11 +1120,19 @@
             if (backgroundOptionsForCurrentModel(provider).length) {
                 text += " · 背景 " + validBackgroundOrDefault(state.activePreset.imageBackground, provider);
             }
+            var outputText = outputControlsPreview(provider);
+            if (outputText) {
+                text += " · " + outputText;
+            }
             elements.sizePreview.textContent = text;
             return;
         }
         var size = selectedImageSize();
         var text = "目标约 " + size.width + " x " + size.height + " px";
+        var limits = imageDimensionLimits(size.width, size.height);
+        if (limits.experimental) {
+            text += " · 2K 以上实验性输出，效果可能不稳定";
+        }
         var requestSize = requestImageSize();
         if (provider.mode === "openaiImages" && requestSize) {
             text += " · API 请求 " + requestSize;
@@ -808,7 +1145,32 @@
         if (requestBackground) {
             text += " · 背景 " + requestBackground;
         }
+        var customOutputText = outputControlsPreview(provider);
+        if (customOutputText) {
+            text += " · " + customOutputText;
+        }
         elements.sizePreview.textContent = text;
+    }
+
+    function outputControlsPreview(provider) {
+        var parts = [];
+        var format = requestOutputFormat(provider);
+        if (format) {
+            parts.push("格式 " + format.toUpperCase());
+        }
+        var outputCompression = requestOutputCompression(provider);
+        if (outputCompression !== null) {
+            parts.push("压缩 " + outputCompression);
+        }
+        var moderation = requestModeration(provider);
+        if (moderation) {
+            parts.push("审核 " + moderation);
+        }
+        var partialImages = requestPartialImages(provider);
+        if (partialImages) {
+            parts.push("预览 " + partialImages);
+        }
+        return parts.join(" · ");
     }
 
     function updateSizeModeVisibility() {
@@ -818,12 +1180,24 @@
         setFieldVisible(elements.resolutionField, isCustom);
         setFieldVisible(elements.aspectField, isCustom);
         updateQualityBackgroundVisibility(provider);
+        updateOutputControlVisibility(provider);
     }
 
     function updateQualityBackgroundVisibility(provider) {
         provider = provider || (state.activePreset ? config.getImageProvider(state.activePreset.provider) : config.getImageProvider(""));
         setFieldVisible(elements.qualityField, Boolean(qualityOptionsForCurrentModel(provider).length));
         setFieldVisible(elements.backgroundField, Boolean(backgroundOptionsForCurrentModel(provider).length));
+    }
+
+    function updateOutputControlVisibility(provider) {
+        provider = provider || (state.activePreset ? config.getImageProvider(state.activePreset.provider) : config.getImageProvider(""));
+        var hasOutputControls = Boolean(outputFormatOptionsForCurrentModel(provider).length);
+        var hasModeration = Boolean(moderationOptionsForCurrentModel(provider).length);
+        var hasStreaming = supportsImageStreaming(provider);
+        setFieldVisible(elements.outputFormatField, hasOutputControls);
+        setFieldVisible(elements.outputCompressionField, hasOutputControls && elements.outputFormatSelect.value !== "png");
+        setFieldVisible(elements.moderationField, hasModeration);
+        setFieldVisible(elements.partialImagesField, hasStreaming);
     }
 
     function renderNativeSizeOptions(nativeSizes) {
@@ -897,6 +1271,32 @@
         });
     }
 
+    function validOutputFormatOrDefault(value, provider) {
+        var options = outputFormatOptionsForCurrentModel(provider);
+        return options.indexOf(value) !== -1 ? value : options[0] || "png";
+    }
+
+    function normalizeOutputCompression(value) {
+        var number = parseInt(value, 10);
+        if (!Number.isFinite(number)) {
+            return 100;
+        }
+        return Math.min(100, Math.max(0, number));
+    }
+
+    function normalizePartialImages(value) {
+        var number = parseInt(value, 10);
+        if (!Number.isFinite(number) || number <= 0) {
+            return null;
+        }
+        return Math.min(3, number);
+    }
+
+    function validModerationOrDefault(value, provider) {
+        var options = moderationOptionsForCurrentModel(provider);
+        return options.indexOf(value) !== -1 ? value : options[0] || "auto";
+    }
+
     function validQualityOrDefault(value, provider) {
         var options = qualityOptionsForCurrentModel(provider);
         return options.indexOf(value) !== -1 ? value : options[0] || "";
@@ -929,6 +1329,43 @@
         return validBackgroundOrDefault(elements.backgroundSelect.value || state.activePreset.imageBackground, provider);
     }
 
+    function requestOutputFormat(provider) {
+        provider = provider || (state.activePreset ? config.getImageProvider(state.activePreset.provider) : config.getImageProvider(""));
+        if (!supportsOutputControls(provider)) {
+            return "";
+        }
+        return validOutputFormatOrDefault(elements.outputFormatSelect.value || state.activePreset.outputFormat, provider);
+    }
+
+    function requestOutputCompression(provider) {
+        var format = requestOutputFormat(provider);
+        if (!format || format === "png") {
+            return null;
+        }
+        return normalizeOutputCompression(elements.outputCompressionInput.value || state.activePreset.outputCompression);
+    }
+
+    function requestModeration(provider) {
+        provider = provider || (state.activePreset ? config.getImageProvider(state.activePreset.provider) : config.getImageProvider(""));
+        if (!moderationOptionsForCurrentModel(provider).length) {
+            return "";
+        }
+        return validModerationOrDefault(elements.moderationSelect.value || state.activePreset.moderation, provider);
+    }
+
+    function requestImageStream(provider) {
+        provider = provider || (state.activePreset ? config.getImageProvider(state.activePreset.provider) : config.getImageProvider(""));
+        return Boolean(requestPartialImages(provider));
+    }
+
+    function requestPartialImages(provider) {
+        provider = provider || (state.activePreset ? config.getImageProvider(state.activePreset.provider) : config.getImageProvider(""));
+        if (!state.activePreset || !supportsImageStreaming(provider)) {
+            return null;
+        }
+        return normalizePartialImages(elements.partialImagesSelect.value || state.activePreset.partialImages);
+    }
+
     function qualityOptionsForCurrentModel(provider) {
         if (provider.mode !== "openaiImages") {
             return provider.qualityOptions && provider.qualityOptions.length ? provider.qualityOptions.slice() : [];
@@ -948,10 +1385,24 @@
             return provider.backgroundOptions && provider.backgroundOptions.length ? provider.backgroundOptions.slice() : [];
         }
         var model = currentImageModel(provider);
-        if (model === "dall-e-2" || model === "dall-e-3") {
+        if (model === "dall-e-2" || model === "dall-e-3" || model === "gpt-image-2") {
             return [];
         }
         return provider.backgroundOptions && provider.backgroundOptions.length ? provider.backgroundOptions.slice() : [];
+    }
+
+    function outputFormatOptionsForCurrentModel(provider) {
+        if (!supportsOutputControls(provider)) {
+            return [];
+        }
+        return provider.outputFormatOptions && provider.outputFormatOptions.length ? provider.outputFormatOptions.slice() : ["png", "jpeg", "webp"];
+    }
+
+    function moderationOptionsForCurrentModel(provider) {
+        if (!isGptImageModel(provider)) {
+            return [];
+        }
+        return provider.moderationOptions && provider.moderationOptions.length ? provider.moderationOptions.slice() : ["auto", "low"];
     }
 
     function currentImageModel(provider) {

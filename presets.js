@@ -165,6 +165,11 @@
             normalized.nativeSize = isValidNativeSize(preset.nativeSize) ? preset.nativeSize : "auto";
             normalized.imageQuality = isValidImageQuality(preset.imageQuality) ? preset.imageQuality : "auto";
             normalized.imageBackground = isValidImageBackground(preset.imageBackground) ? preset.imageBackground : "auto";
+            normalized.outputFormat = isValidOutputFormat(preset.outputFormat) ? preset.outputFormat : "png";
+            normalized.outputCompression = normalizeOutputCompression(preset.outputCompression);
+            normalized.partialImages = preset.imageStream ? normalizePartialImages(preset.partialImages) : null;
+            normalized.imageStream = Boolean(normalized.partialImages);
+            normalized.moderation = isValidModeration(preset.moderation) ? preset.moderation : "auto";
             normalized.resolution = normalizeImageResolution(preset.resolution);
             normalized.aspect = isValidAspect(preset.aspect) ? preset.aspect : "1:1";
         }
@@ -199,6 +204,30 @@
 
     function isValidImageBackground(value) {
         return ["auto", "transparent", "opaque"].indexOf(value) !== -1;
+    }
+
+    function isValidOutputFormat(value) {
+        return ["png", "jpeg", "webp"].indexOf(value) !== -1;
+    }
+
+    function normalizeOutputCompression(value) {
+        var number = parseInt(value, 10);
+        if (!Number.isFinite(number)) {
+            return 100;
+        }
+        return Math.min(100, Math.max(0, number));
+    }
+
+    function normalizePartialImages(value) {
+        var number = parseInt(value, 10);
+        if (!Number.isFinite(number) || number <= 0) {
+            return null;
+        }
+        return Math.min(3, number);
+    }
+
+    function isValidModeration(value) {
+        return ["auto", "low"].indexOf(value) !== -1;
     }
 
     function readJson(key, fallback) {

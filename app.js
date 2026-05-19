@@ -1258,13 +1258,16 @@
         saveChats();
         renderAll();
 
+        var requestOptions = {
+            chat: chat,
+            continuingAssistant: continuingAssistant,
+            continuationPrefix: continuationPrefix,
+            forceFullHistory: continuingAssistant,
+            responseWarnings: []
+        };
+
         try {
-            await requestCompletion(chat, assistantMessage, {
-                chat: chat,
-                continuingAssistant: continuingAssistant,
-                continuationPrefix: continuationPrefix,
-                forceFullHistory: continuingAssistant
-            });
+            await requestCompletion(chat, assistantMessage, requestOptions);
             if (continuingAssistant) {
                 assistantMessage.content = normalizeContinuationContent(assistantMessage.content, continuationPrefix);
             }
@@ -1279,7 +1282,7 @@
                 state.status = null;
             }
             if (!continuingAssistant || hasGeneratedAssistantContent(assistantMessage, continuationPrefix)) {
-                setFeedback("请求完成。", "ok");
+                setFeedback(successFeedbackText(requestOptions), requestOptions.responseWarnings.length ? "warn" : "ok");
             }
         } catch (error) {
             if (error.name === "AbortError") {
@@ -1539,6 +1542,68 @@
             );
     }
 
+    function successFeedbackText(options) {
+        var warnings = options && Array.isArray(options.responseWarnings) ? options.responseWarnings : [];
+        return warnings.length ? "请求完成。" + warnings.join(" ") : "请求完成。";
+    }
+
+    function collectResponseModelWarning(data, requestedModel, options) {
+        var requestModel = String(requestedModel || "").trim();
+        var responseModel = extractResponseModel(data);
+        if (!requestModel || !responseModel || requestModel === responseModel) {
+            return;
+        }
+        addResponseWarning(options, "上游返回模型与请求不一致：" + requestModel + " -> " + responseModel + "。");
+    }
+
+    function addResponseWarning(options, message) {
+        if (!options) {
+            return;
+        }
+        if (!Array.isArray(options.responseWarnings)) {
+            options.responseWarnings = [];
+        }
+        if (options.responseWarnings.indexOf(message) === -1) {
+            options.responseWarnings.push(message);
+        }
+    }
+
+    function extractResponseModel(data) {
+        if (!data || typeof data !== "object") {
+            return "";
+        }
+        if (typeof data.model === "string" && data.model.trim()) {
+            return data.model.trim();
+        }
+        if (data.response) {
+            var responseModel = extractResponseModel(data.response);
+            if (responseModel) {
+                return responseModel;
+            }
+        }
+        if (data.result) {
+            var resultModel = extractResponseModel(data.result);
+            if (resultModel) {
+                return resultModel;
+            }
+        }
+        if (data.message && typeof data.message === "object") {
+            var messageModel = extractResponseModel(data.message);
+            if (messageModel) {
+                return messageModel;
+            }
+        }
+        if (Array.isArray(data.choices)) {
+            for (var index = 0; index < data.choices.length; index += 1) {
+                var choiceModel = extractResponseModel(data.choices[index]);
+                if (choiceModel) {
+                    return choiceModel;
+                }
+            }
+        }
+        return "";
+    }
+
     function applyAssistantContent(assistantMessage, content, options) {
         var text = String(content || "");
         if (text) {
@@ -1745,6 +1810,7 @@
 
         if (state.settings.stream && response.body && isEventStream(response)) {
             await readSse(response, function(json) {
+                collectResponseModelWarning(json, body.model, options);
                 var choice = json.choices && json.choices[0];
                 var delta = (choice && choice.delta) || {};
                 var reasoningDelta = markdown.reasoningTextFromObject(delta);
@@ -1761,6 +1827,7 @@
         }
 
         var data = await response.json();
+        collectResponseModelWarning(data, body.model, options);
         var message = (((data.choices || [])[0] || {}).message || {});
         applyAssistantReasoning(assistantMessage, markdown.reasoningTextFromObject(message), options);
         applyAssistantContent(assistantMessage, openAiMessageContent(message), options);
@@ -1863,6 +1930,7 @@
         if (state.settings.stream && response.body && isEventStream(response)) {
             var completedResponse = null;
             await readSse(response, function(json) {
+                collectResponseModelWarning(json.response || json, body.model, options);
                 if (json.response && json.response.id) {
                     completedResponse = json.response;
                 }
@@ -1905,6 +1973,7 @@
         }
 
         var data = await response.json();
+        collectResponseModelWarning(data, body.model, options);
         applyAssistantReasoning(assistantMessage, extractOpenAiResponseReasoning(data), options);
         applyAssistantContent(assistantMessage, extractOpenAiResponseText(data), options);
         applyAssistantImages(assistantMessage, extractOpenAiResponseImages(data), { replacePreviews: true });
@@ -1943,6 +2012,7 @@
 
         if (state.settings.stream && response.body && isEventStream(response)) {
             await readSse(response, function(json) {
+                collectResponseModelWarning(json.result || json, body.model, options);
                 if (json.type === "reasoning.delta" && typeof json.content === "string") {
                     assistantMessage.reasoning = (assistantMessage.reasoning || "") + json.content;
                     scheduleMessageRender();
@@ -1970,6 +2040,7 @@
         }
 
         var data = await response.json();
+        collectResponseModelWarning(data, body.model, options);
         recordLmStudioRestSuccess(chat, data, options);
         assistantMessage.reasoning = extractLmStudioRestReasoning(data);
         applyAssistantContent(assistantMessage, extractLmStudioRestText(data), options);
@@ -2017,6 +2088,7 @@
 
         if (state.settings.stream && response.body && !isJsonResponse(response)) {
             await readJsonLines(response, function(json) {
+                collectResponseModelWarning(json, body.model, options);
                 var delta = json.message && json.message.content;
                 if (delta) {
                     appendAssistantContent(assistantMessage, delta);
@@ -2027,6 +2099,7 @@
         }
 
         var data = await response.json();
+        collectResponseModelWarning(data, body.model, options);
         applyAssistantContent(assistantMessage, (data.message && data.message.content) || "", options);
     }
 
@@ -2056,6 +2129,7 @@
 
         if (state.settings.stream && response.body && isEventStream(response)) {
             await readSse(response, function(json) {
+                collectResponseModelWarning(json.message || json, body.model, options);
                 if (json.type === "content_block_delta" && json.delta) {
                     if (typeof json.delta.text === "string") {
                         appendAssistantContent(assistantMessage, json.delta.text);
@@ -2090,6 +2164,7 @@
         }
 
         var data = await response.json();
+        collectResponseModelWarning(data, body.model, options);
         applyAssistantReasoning(assistantMessage, extractAnthropicReasoning(data), options);
         applyAssistantContent(assistantMessage, extractAnthropicText(data), options);
     }
