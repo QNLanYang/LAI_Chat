@@ -1154,8 +1154,27 @@ button {
 }
 
 .image-job-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     color: var(--muted);
     font-size: 12px;
+}
+
+.image-job-delete {
+    font-size: 12px;
+    padding: 2px 8px;
+    color: var(--muted);
+}
+
+.image-job-delete:hover {
+    background: var(--panel-danger);
+    color: var(--danger);
+}
+
+.image-job-delete:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
 }
 
 .image-grid {

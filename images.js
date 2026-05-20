@@ -7,6 +7,7 @@
     var mediaStore = window.LocalAiMediaStore;
     var ui = window.LocalAiUi;
     var IMAGE_KEY = config.STORAGE_KEYS.imageJobs;
+    var IMAGE_REQUEST_TIMEOUT_MS = 300000;
 
     var elements = {};
     var modelPicker = null;
@@ -444,9 +445,24 @@
         state.isGenerating = true;
         state.lastResponseWarnings = [];
         updateGeneratingState();
-        setFeedback("正在请求 " + config.imageRequestUrlFor(state.activePreset, state.references.length ? "edit" : "generation"), "ok");
+        var abortController = new AbortController();
+        var signal = abortController.signal;
+        var timeoutId = setTimeout(function() {
+            abortController.abort();
+        }, IMAGE_REQUEST_TIMEOUT_MS);
+        var statusTimer1 = setTimeout(function() {
+            if (state.isGenerating) {
+                setFeedback("画图中，请勿刷新或离开页面...", "ok");
+            }
+        }, 5000);
+        var statusTimer2 = setTimeout(function() {
+            if (state.isGenerating) {
+                setFeedback("仍在生成中，请耐心等待，勿刷新页面...", "ok");
+            }
+        }, 60000);
+        setFeedback("正在请求，请勿刷新或离开页面...", "ok");
         try {
-            var images = await requestImages(requestPrompt);
+            var images = await requestImages(requestPrompt, signal);
             if (!images.length) {
                 throw new Error("接口未返回图片。");
             }
@@ -468,8 +484,15 @@
             renderResults();
             setFeedback(state.lastResponseWarnings.length ? "生成完成。" + state.lastResponseWarnings.join(" ") : "生成完成。", state.lastResponseWarnings.length ? "warn" : "ok");
         } catch (error) {
-            setFeedback(explainError(error), "error");
+            if (error.name === "AbortError") {
+                setFeedback("请求超时（" + Math.round(IMAGE_REQUEST_TIMEOUT_MS / 60000) + "分钟），请稍后重试。", "error");
+            } else {
+                setFeedback(explainError(error), "error");
+            }
         } finally {
+            clearTimeout(timeoutId);
+            clearTimeout(statusTimer1);
+            clearTimeout(statusTimer2);
             state.isGenerating = false;
             updateGeneratingState();
             updateStatus();
@@ -521,18 +544,18 @@
         }
     }
 
-    async function requestImages(prompt) {
+    async function requestImages(prompt, signal) {
         var provider = config.getImageProvider(state.activePreset.provider);
         if (provider.mode === "geminiImages") {
-            return requestGeminiImages(prompt);
+            return requestGeminiImages(prompt, signal);
         }
         if (state.references.length) {
-            return requestOpenAiImageEdit(prompt);
+            return requestOpenAiImageEdit(prompt, signal);
         }
-        return requestOpenAiImageGeneration(prompt);
+        return requestOpenAiImageGeneration(prompt, signal);
     }
 
-    async function requestOpenAiImageGeneration(prompt) {
+    async function requestOpenAiImageGeneration(prompt, signal) {
         var requestSize = requestImageSize();
         var provider = config.getImageProvider(state.activePreset.provider);
         var body = {
@@ -555,13 +578,14 @@
         var response = await fetch(config.imageRequestUrlFor(state.activePreset, "generation"), {
             method: "POST",
             headers: imageHeaders({ json: true, bearer: true }),
-            body: JSON.stringify(body)
+            body: JSON.stringify(body),
+            signal: signal
         });
         await ensureOk(response);
         return handleOpenAiImageResponse(response, body);
     }
 
-    async function requestOpenAiImageEdit(prompt) {
+    async function requestOpenAiImageEdit(prompt, signal) {
         var requestSize = requestImageSize();
         var provider = config.getImageProvider(state.activePreset.provider);
         var form = new FormData();
@@ -586,7 +610,8 @@
         var response = await fetch(config.imageRequestUrlFor(state.activePreset, "edit"), {
             method: "POST",
             headers: imageHeaders({ bearer: true }),
-            body: form
+            body: form,
+            signal: signal
         });
         await ensureOk(response);
         return handleOpenAiImageResponse(response, requestOptions);
@@ -643,7 +668,7 @@
         return options;
     }
 
-    async function requestGeminiImages(prompt) {
+    async function requestGeminiImages(prompt, signal) {
         var parts = [{ text: prompt }];
         state.references.forEach(function(image) {
             parts.push({
@@ -662,7 +687,8 @@
                     role: "user",
                     parts: parts
                 }]
-            })
+            }),
+            signal: signal
         });
         await ensureOk(response);
         return extractGeminiImages(await response.json());
@@ -718,8 +744,10 @@
     async function handleOpenAiImageResponse(response, requestOptions) {
         var contentType = response.headers.get("content-type") || "";
         if (contentType.indexOf("text/event-stream") !== -1) {
+            setFeedback("接收中，请勿刷新或离开页面...", "ok");
             return extractOpenAiStreamImages(response, requestOptions);
         }
+        setFeedback("接收中...", "ok");
         return extractOpenAiImages(await response.json(), requestOptions);
     }
 
@@ -1111,9 +1139,6 @@
             var text = provider.imageSizeMode === "prompt" || !nativeSizes.length ?
                 "原生模式: 不额外注入尺寸提示" :
                 "原生尺寸: " + formatImageSizeLabel(validNativeSizeOrDefault(state.activePreset.nativeSize, provider));
-            if (nativeSizes.length) {
-                text += " · 可选 " + nativeSizes.map(formatImageSizeLabel).join(" / ");
-            }
             if (qualityOptionsForCurrentModel(provider).length) {
                 text += " · 质量 " + validQualityOrDefault(state.activePreset.imageQuality, provider);
             }
@@ -1456,7 +1481,19 @@
             article.className = "image-job";
             var meta = document.createElement("div");
             meta.className = "image-job-meta";
-            meta.textContent = job.model + " · " + ui.formatTime(job.createdAt);
+            var metaText = document.createElement("span");
+            metaText.textContent = job.model + " · " + ui.formatTime(job.createdAt);
+            var deleteBtn = document.createElement("button");
+            deleteBtn.type = "button";
+            deleteBtn.className = "ghost-button image-job-delete";
+            deleteBtn.textContent = "删除";
+            deleteBtn.title = "删除此记录";
+            deleteBtn.disabled = state.isGenerating;
+            deleteBtn.addEventListener("click", function() {
+                deleteJob(job.id);
+            });
+            meta.appendChild(metaText);
+            meta.appendChild(deleteBtn);
             var prompt = document.createElement("p");
             prompt.textContent = job.prompt;
             var grid = document.createElement("div");
@@ -1507,6 +1544,24 @@
             article.appendChild(grid);
             elements.results.appendChild(article);
         });
+    }
+
+    function deleteJob(jobId) {
+        if (state.isGenerating) {
+            return;
+        }
+        var job = state.jobs.find(function(item) {
+            return item.id === jobId;
+        });
+        if (!job || !confirm("删除这条图片记录？")) {
+            return;
+        }
+        state.jobs = state.jobs.filter(function(item) {
+            return item.id !== jobId;
+        });
+        saveJobs();
+        pruneStoredImages();
+        renderResults();
     }
 
     async function addReferenceFiles(fileList) {
