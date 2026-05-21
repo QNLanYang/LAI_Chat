@@ -9,6 +9,7 @@
         activeChatPreset: "qnlanyang.localAi.activeChatPreset.v1",
         activeImagePreset: "qnlanyang.localAi.activeImagePreset.v1",
         imageJobs: "qnlanyang.localAi.imageJobs.v1",
+        modelCapabilities: "qnlanyang.localAi.modelCapabilities.v1",
         theme: "qnlanyang.localAi.theme.v1"
     };
 
@@ -340,8 +341,34 @@
     }
 
     function requestUrlFor(settings, type) {
+        var provider = getProvider(settings.provider);
+        var path = requestPathFor(settings, type);
         var base = normalizeAddress(settings.endpoint, settings.provider);
-        return endpointFor(base, requestPathFor(settings, type));
+        return endpointFor(stripConflictingRequestPath(base, provider, path), path);
+    }
+
+    function stripConflictingRequestPath(base, provider, desiredPath) {
+        var paths = [provider.modelsPath, provider.chatPath, provider.responsesPath].filter(Boolean);
+        var result = base || "";
+        paths.forEach(function(path) {
+            if (path === desiredPath) {
+                return;
+            }
+            result = stripPathSuffix(result, path);
+        });
+        return result;
+    }
+
+    function stripPathSuffix(base, path) {
+        var cleanBase = (base || "").replace(/\/+$/, "");
+        var cleanPath = (path || "").replace(/\/+$/, "");
+        if (!cleanBase || !cleanPath) {
+            return base;
+        }
+        if (cleanBase.toLowerCase().endsWith(cleanPath.toLowerCase())) {
+            return cleanBase.slice(0, -cleanPath.length).replace(/\/+$/, "");
+        }
+        return base;
     }
 
     function imageRequestPathFor(preset, type) {

@@ -5,6 +5,7 @@
     var presetsApi = window.LocalAiPresets;
     var secrets = window.LocalAiSecrets;
     var ui = window.LocalAiUi;
+    var mediaStore = window.LocalAiMediaStore;
     var elements = {};
     var state = {
         kind: "chat",
@@ -41,11 +42,20 @@
             presetApiKeyInput: document.getElementById("presetApiKeyInput"),
             presetPreview: document.getElementById("presetPreview"),
             savePresetButton: document.getElementById("savePresetButton"),
+            refreshStorageButton: document.getElementById("refreshStorageButton"),
+            storageStats: document.getElementById("storageStats"),
+            exportAllDataButton: document.getElementById("exportAllDataButton"),
+            resetMigrationStateButton: document.getElementById("resetMigrationStateButton"),
+            clearImageCacheButton: document.getElementById("clearImageCacheButton"),
+            resetLocalDataButton: document.getElementById("resetLocalDataButton"),
             settingsFeedback: document.getElementById("settingsFeedback")
         };
 
         bindEvents();
         loadKind("chat");
+        refreshStorageStats().catch(function(error) {
+            setFeedback("存储统计读取失败：" + error.message, "warn");
+        });
     }
 
     function bindEvents() {
@@ -116,6 +126,130 @@
                 setFeedback(error.message, "error");
             });
         });
+        elements.refreshStorageButton.addEventListener("click", function() {
+            refreshStorageStats().catch(function(error) {
+                setFeedback("存储统计读取失败：" + error.message, "warn");
+            });
+        });
+        elements.exportAllDataButton.addEventListener("click", function() {
+            exportAllData().catch(function(error) {
+                setFeedback("导出失败：" + error.message, "error");
+            });
+        });
+        elements.resetMigrationStateButton.addEventListener("click", resetMigrationState);
+        elements.clearImageCacheButton.addEventListener("click", function() {
+            clearImageCache().catch(function(error) {
+                setFeedback("清理失败：" + error.message, "error");
+            });
+        });
+        elements.resetLocalDataButton.addEventListener("click", function() {
+            resetLocalData().catch(function(error) {
+                setFeedback("清空失败：" + error.message, "error");
+            });
+        });
+    }
+
+    async function refreshStorageStats() {
+        var stats = await collectStorageStats();
+        renderStorageStats(stats);
+    }
+
+    async function collectStorageStats() {
+        var chats = parseJsonArray(localStorage.getItem(config.STORAGE_KEYS.chats));
+        var imageJobs = parseJsonArray(localStorage.getItem(config.STORAGE_KEYS.imageJobs));
+        var presets = presetsApi.loadPresets();
+        var mediaRecords = await listMediaRecords();
+        var estimate = navigator.storage && navigator.storage.estimate ?
+            await navigator.storage.estimate() :
+            null;
+        var messageCount = 0;
+        var chatImageCount = 0;
+        chats.forEach(function(chat) {
+            (chat.messages || []).forEach(function(message) {
+                messageCount += 1;
+                chatImageCount += Array.isArray(message.images) ? message.images.length : 0;
+            });
+        });
+        return {
+            chats: chats.length,
+            messages: messageCount,
+            chatImages: chatImageCount,
+            presets: presets.length,
+            imageJobs: imageJobs.length,
+            mediaCount: mediaRecords.length,
+            mediaBytes: sum(mediaRecords, "size"),
+            localStorageBytes: localStorageBytes(),
+            usageBytes: estimate && estimate.usage || 0,
+            quotaBytes: estimate && estimate.quota || 0
+        };
+    }
+
+    function renderStorageStats(stats) {
+        elements.storageStats.textContent = "";
+        [
+            ["聊天", stats.chats + " 个会话 · " + stats.messages + " 条消息 · " + stats.chatImages + " 张聊天图片"],
+            ["预设", stats.presets + " 个 Provider 预设"],
+            ["图片页", stats.imageJobs + " 条生成记录"],
+            ["IndexedDB", stats.mediaCount + " 张媒体 · " + formatBytes(stats.mediaBytes)],
+            ["localStorage", formatBytes(stats.localStorageBytes)],
+            ["浏览器估算", stats.usageBytes ? formatBytes(stats.usageBytes) + " / " + formatBytes(stats.quotaBytes) : "当前浏览器未提供"]
+        ].forEach(function(row) {
+            var item = document.createElement("div");
+            item.className = "storage-stat";
+            var label = document.createElement("span");
+            label.textContent = row[0];
+            var value = document.createElement("strong");
+            value.textContent = row[1];
+            item.appendChild(label);
+            item.appendChild(value);
+            elements.storageStats.appendChild(item);
+        });
+    }
+
+    async function clearImageCache() {
+        if (!confirm("清理图片生成页历史和图片页 IndexedDB 缓存？聊天会话和 Provider 预设不会被删除。")) {
+            return;
+        }
+        localStorage.removeItem(config.STORAGE_KEYS.imageJobs);
+        if (mediaStore && typeof mediaStore.clearImages === "function") {
+            await mediaStore.clearImages({ scope: "image-job" });
+        } else if (mediaStore && typeof mediaStore.pruneImages === "function") {
+            await mediaStore.pruneImages([], { scope: "image-job" });
+        }
+        await refreshStorageStats();
+        setFeedback("已清理图片页缓存。", "ok");
+    }
+
+    async function exportAllData() {
+        if (!confirm("全量导出会包含 Provider 预设、API Key、会话、图片历史和 IndexedDB 媒体文件。请只保存在可信位置。")) {
+            return;
+        }
+        setFeedback("正在导出全量数据...", "ok");
+        var payload = {
+            app: "LAI Chat",
+            version: 1,
+            exportedAt: new Date().toISOString(),
+            localStorage: storageSnapshot(localStorage),
+            sessionStorage: storageSnapshot(sessionStorage),
+            indexedDb: {
+                mediaDb: mediaStore && mediaStore.DB_NAME || "qnlanyang.localAi.media.v1",
+                images: await exportMediaRecords()
+            },
+            cacheStorage: {
+                keys: await cacheKeys()
+            }
+        };
+        downloadJson(payload, "lai-chat-full-data-" + new Date().toISOString().slice(0, 10) + ".json");
+        setFeedback("已导出全量数据。", "ok");
+    }
+
+    function resetMigrationState() {
+        if (!confirm("重置迁移状态只会删除本应用命名空间下包含 migration/migrated 的标记，不会删除会话、预设或图片。")) {
+            return;
+        }
+        var removed = removeMigrationKeys(localStorage) + removeMigrationKeys(sessionStorage);
+        setFeedback(removed ? "已重置 " + removed + " 个迁移状态标记。" : "当前没有可重置的迁移状态标记。", removed ? "ok" : "warn");
+        refreshStorageStats().catch(function() {});
     }
 
     function loadKind(kind) {
@@ -450,6 +584,58 @@
         }
     }
 
+    async function resetLocalData() {
+        if (!confirm("将清空本应用保存在当前浏览器里的所有本地数据。操作前请先导出 Provider 预设，确认继续？")) {
+            return;
+        }
+        var keyword = prompt("二次确认：输入“清空本地数据”以继续。");
+        if (keyword !== "清空本地数据") {
+            setFeedback("已取消清空。", "warn");
+            return;
+        }
+        setFeedback("正在清空本地数据...", "warn");
+        localStorage.clear();
+        sessionStorage.clear();
+        await deleteMediaDatabase();
+        await clearBrowserCaches();
+        setFeedback("本地数据已清空，页面即将刷新。", "ok");
+        window.setTimeout(function() {
+            window.location.reload();
+        }, 800);
+    }
+
+    async function deleteMediaDatabase() {
+        if (window.LocalAiMediaStore && typeof window.LocalAiMediaStore.deleteDatabase === "function") {
+            await window.LocalAiMediaStore.deleteDatabase();
+            return;
+        }
+        if (!("indexedDB" in window)) {
+            return;
+        }
+        await new Promise(function(resolve, reject) {
+            var request = indexedDB.deleteDatabase("qnlanyang.localAi.media.v1");
+            request.onsuccess = function() {
+                resolve();
+            };
+            request.onerror = function() {
+                reject(request.error || new Error("IndexedDB 删除失败。"));
+            };
+            request.onblocked = function() {
+                reject(new Error("IndexedDB 正被其他页面占用，请关闭本应用的其他标签页后重试。"));
+            };
+        });
+    }
+
+    async function clearBrowserCaches() {
+        if (!("caches" in window)) {
+            return;
+        }
+        var keys = await caches.keys();
+        await Promise.all(keys.map(function(key) {
+            return caches.delete(key);
+        }));
+    }
+
     function presetsFromPayload(payload) {
         if (Array.isArray(payload)) {
             return payload.filter(isPresetLike);
@@ -470,6 +656,125 @@
             next.id = next.kind + "-imported-" + Date.now() + "-" + Math.random().toString(16).slice(2);
         }
         return next;
+    }
+
+    async function listMediaRecords() {
+        if (!mediaStore || typeof mediaStore.listImages !== "function") {
+            return [];
+        }
+        try {
+            return await mediaStore.listImages();
+        } catch (error) {
+            return [];
+        }
+    }
+
+    async function exportMediaRecords() {
+        var records = await listMediaRecords();
+        if (!mediaStore || typeof mediaStore.getImage !== "function") {
+            return records;
+        }
+        var exported = [];
+        for (var index = 0; index < records.length; index += 1) {
+            var metadata = records[index];
+            var full = await mediaStore.getImage(metadata.id);
+            exported.push(Object.assign({}, metadata, {
+                dataUrl: full && full.blob ? await blobToDataUrl(full.blob) : ""
+            }));
+        }
+        return exported;
+    }
+
+    function parseJsonArray(value) {
+        try {
+            var parsed = JSON.parse(value || "[]");
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+            return [];
+        }
+    }
+
+    function storageSnapshot(storage) {
+        var snapshot = {};
+        for (var index = 0; index < storage.length; index += 1) {
+            var key = storage.key(index);
+            snapshot[key] = storage.getItem(key);
+        }
+        return snapshot;
+    }
+
+    function localStorageBytes() {
+        var total = 0;
+        for (var index = 0; index < localStorage.length; index += 1) {
+            var key = localStorage.key(index);
+            total += byteLength(key) + byteLength(localStorage.getItem(key) || "");
+        }
+        return total;
+    }
+
+    function byteLength(value) {
+        return new Blob([String(value || "")]).size;
+    }
+
+    function sum(items, key) {
+        return (items || []).reduce(function(total, item) {
+            return total + (Number(item && item[key]) || 0);
+        }, 0);
+    }
+
+    function formatBytes(bytes) {
+        if (!bytes) {
+            return "0 KB";
+        }
+        if (bytes < 1024 * 1024) {
+            return Math.max(1, Math.round(bytes / 1024)) + " KB";
+        }
+        return (bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0) + " MB";
+    }
+
+    function blobToDataUrl(blob) {
+        return new Promise(function(resolve, reject) {
+            var reader = new FileReader();
+            reader.onload = function() {
+                resolve(String(reader.result || ""));
+            };
+            reader.onerror = function() {
+                reject(new Error("媒体文件读取失败。"));
+            };
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    async function cacheKeys() {
+        if (!("caches" in window)) {
+            return [];
+        }
+        return caches.keys();
+    }
+
+    function downloadJson(payload, filename) {
+        var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        var link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        URL.revokeObjectURL(link.href);
+        link.remove();
+    }
+
+    function removeMigrationKeys(storage) {
+        var keys = [];
+        for (var index = 0; index < storage.length; index += 1) {
+            var key = storage.key(index);
+            if (/^qnlanyang\.localAi\./.test(key) && /migrat/i.test(key)) {
+                keys.push(key);
+            }
+        }
+        keys.forEach(function(key) {
+            storage.removeItem(key);
+        });
+        return keys.length;
     }
 
     function setFeedback(text, tone) {

@@ -18,6 +18,7 @@
     <script src="theme.js" defer></script>
     <script src="secrets.js" defer></script>
     <script src="presets.js" defer></script>
+    <script src="media-store.js" defer></script>
     <script src="ui-utils.js" defer></script>
     <script src="app.js" defer></script>
 </head>
@@ -50,6 +51,7 @@
                     <h2>会话</h2>
                     <button class="ghost-button" type="button" id="newChatButton">新建</button>
                 </div>
+                <input class="chat-search" id="chatSearchInput" type="search" placeholder="搜索会话" autocomplete="off">
                 <div class="chat-list" id="chatList"></div>
             </section>
 
@@ -92,6 +94,14 @@
                 <div class="row-actions">
                     <button class="ghost-button" type="button" id="loadModelsButton">测试连接/刷新模型</button>
                     <a class="ghost-button link-button" href="settings.html">管理预设</a>
+                </div>
+                <div class="model-capability-panel" id="modelCapabilityPanel" hidden>
+                    <div class="model-capability-head">
+                        <span>模型能力</span>
+                        <button class="ghost-button" type="button" id="testModelCapabilitiesButton">测试能力</button>
+                    </div>
+                    <div class="model-capability-list" id="modelCapabilityList"></div>
+                    <div class="model-capability-note" id="modelCapabilityNote"></div>
                 </div>
                 <div class="connection-feedback" id="connectionFeedback" aria-live="polite"></div>
                 <label hidden>
@@ -163,11 +173,15 @@
                     <input id="responseImageGenerationCheckbox" type="checkbox">
                     <span>允许 Responses 调用图片生成</span>
                 </label>
+                <div class="context-meter" id="contextMeter" aria-live="polite"></div>
             </section>
 
             <footer class="sidebar-footer">
+                <button class="ghost-button" type="button" id="importButton">导入</button>
                 <button class="ghost-button" type="button" id="exportButton">导出</button>
+                <button class="ghost-button" type="button" id="undoDeleteButton" disabled>撤销删除</button>
                 <button class="ghost-button danger" type="button" id="clearButton">清空</button>
+                <input id="chatImportInput" type="file" accept="application/json,.json" hidden>
             </footer>
         </aside>
         <button class="sidebar-scrim" type="button" id="sidebarScrim" aria-label="关闭菜单" hidden></button>

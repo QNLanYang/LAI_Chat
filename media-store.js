@@ -66,7 +66,31 @@
         });
     }
 
-    function pruneImages(keepIds) {
+    function listImages() {
+        return openDb().then(function(db) {
+            return new Promise(function(resolve, reject) {
+                var records = [];
+                var transaction = db.transaction(IMAGE_STORE, "readonly");
+                var store = transaction.objectStore(IMAGE_STORE);
+                var request = store.openCursor();
+                request.onsuccess = function() {
+                    var cursor = request.result;
+                    if (!cursor) {
+                        resolve(records);
+                        return;
+                    }
+                    records.push(imageMetadata(cursor.value));
+                    cursor.continue();
+                };
+                request.onerror = function() {
+                    reject(request.error || new Error("图片列表读取失败。"));
+                };
+            });
+        });
+    }
+
+    function pruneImages(keepIds, options) {
+        options = options || {};
         var keep = {};
         (keepIds || []).forEach(function(id) {
             if (id) {
@@ -84,7 +108,7 @@
                         resolve();
                         return;
                     }
-                    if (!keep[cursor.key]) {
+                    if (!keep[cursor.key] && shouldPruneRecord(cursor.value, options)) {
                         cursor.delete();
                     }
                     cursor.continue();
@@ -96,9 +120,89 @@
         });
     }
 
+    function shouldPruneRecord(record, options) {
+        if (options.scope) {
+            return record && record.scope === options.scope;
+        }
+        if (record && record.scope && record.scope !== "image-job") {
+            return false;
+        }
+        return true;
+    }
+
+    function clearImages(options) {
+        options = options || {};
+        return openDb().then(function(db) {
+            return new Promise(function(resolve, reject) {
+                var transaction = db.transaction(IMAGE_STORE, "readwrite");
+                var store = transaction.objectStore(IMAGE_STORE);
+                var request = store.openCursor();
+                request.onsuccess = function() {
+                    var cursor = request.result;
+                    if (!cursor) {
+                        resolve();
+                        return;
+                    }
+                    if (!options.scope || cursor.value && cursor.value.scope === options.scope) {
+                        cursor.delete();
+                    }
+                    cursor.continue();
+                };
+                request.onerror = function() {
+                    reject(request.error || new Error("图片缓存清理失败。"));
+                };
+            });
+        });
+    }
+
+    function imageMetadata(record) {
+        var blob = record && record.blob;
+        return {
+            id: record && record.id || "",
+            name: record && record.name || "",
+            type: record && record.type || blob && blob.type || "",
+            scope: record && record.scope || "",
+            source: record && record.source || "",
+            size: record && record.size || blob && blob.size || 0,
+            createdAt: record && record.createdAt || ""
+        };
+    }
+
+    function deleteDatabase() {
+        var oldDbPromise = dbPromise;
+        dbPromise = null;
+        return Promise.resolve(oldDbPromise).catch(function() {
+            return null;
+        }).then(function(db) {
+            if (db && typeof db.close === "function") {
+                db.close();
+            }
+            return new Promise(function(resolve, reject) {
+                if (!("indexedDB" in window)) {
+                    resolve();
+                    return;
+                }
+                var request = indexedDB.deleteDatabase(DB_NAME);
+                request.onsuccess = function() {
+                    resolve();
+                };
+                request.onerror = function() {
+                    reject(request.error || new Error("IndexedDB 删除失败。"));
+                };
+                request.onblocked = function() {
+                    reject(new Error("IndexedDB 正被其他页面占用，请关闭本应用的其他标签页后重试。"));
+                };
+            });
+        });
+    }
+
     window.LocalAiMediaStore = {
+        DB_NAME: DB_NAME,
         putImage: putImage,
         getImage: getImage,
-        pruneImages: pruneImages
+        listImages: listImages,
+        pruneImages: pruneImages,
+        clearImages: clearImages,
+        deleteDatabase: deleteDatabase
     };
 })(window);

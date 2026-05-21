@@ -6,11 +6,17 @@
     var presetsApi = window.LocalAiPresets;
     var secrets = window.LocalAiSecrets;
     var ui = window.LocalAiUi;
+    var mediaStore = window.LocalAiMediaStore;
     var CHAT_KEY = config.STORAGE_KEYS.chats;
     var SETTINGS_KEY = config.STORAGE_KEYS.settings;
-    var API_KEY = config.STORAGE_KEYS.apiKey;
     var providerDefaults = config.PROVIDERS;
     var defaultSettings = config.DEFAULT_SETTINGS;
+    var CAPABILITY_DEFS = [
+        { key: "reasoning", label: "推理" },
+        { key: "vision", label: "视觉" },
+        { key: "tools", label: "工具" }
+    ];
+    var TINY_PNG_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2P8z8DwHwAFBQIAHl6u2QAAAABJRU5ErkJggg==";
 
     var elements = {};
     var modelPicker = null;
@@ -20,15 +26,21 @@
         settings: loadSettings(),
         pendingImages: [],
         modelOptions: [],
+        modelMetadataByName: {},
+        modelCapabilityCache: {},
+        activeCapabilityTests: null,
         endpointWasAutoFilled: false,
         abortController: null,
         isSending: false,
         isLoadingModels: false,
+        isTestingCapabilities: false,
         chatPresets: [],
         activeChatPreset: null,
         editingMessageId: "",
         reasoningOpenState: {},
         activeGeneratingMessageId: "",
+        chatSearch: "",
+        deletedChat: null,
         status: null
     };
 
@@ -42,6 +54,7 @@
             sidebarCloseButton: document.getElementById("sidebarCloseButton"),
             sidebarScrim: document.getElementById("sidebarScrim"),
             chatList: document.getElementById("chatList"),
+            chatSearchInput: document.getElementById("chatSearchInput"),
             newChatButton: document.getElementById("newChatButton"),
             chatPresetSelect: document.getElementById("chatPresetSelect"),
             providerSelect: document.getElementById("providerSelect"),
@@ -54,6 +67,10 @@
             modelMenuButton: document.getElementById("modelMenuButton"),
             modelMenu: document.getElementById("modelMenu"),
             loadModelsButton: document.getElementById("loadModelsButton"),
+            modelCapabilityPanel: document.getElementById("modelCapabilityPanel"),
+            modelCapabilityList: document.getElementById("modelCapabilityList"),
+            modelCapabilityNote: document.getElementById("modelCapabilityNote"),
+            testModelCapabilitiesButton: document.getElementById("testModelCapabilitiesButton"),
             connectionFeedback: document.getElementById("connectionFeedback"),
             apiKeyInput: document.getElementById("apiKeyInput"),
             systemPromptInput: document.getElementById("systemPromptInput"),
@@ -75,7 +92,11 @@
             streamCheckbox: document.getElementById("streamCheckbox"),
             responseImageGenerationField: document.getElementById("responseImageGenerationField"),
             responseImageGenerationCheckbox: document.getElementById("responseImageGenerationCheckbox"),
+            contextMeter: document.getElementById("contextMeter"),
+            importButton: document.getElementById("importButton"),
             exportButton: document.getElementById("exportButton"),
+            chatImportInput: document.getElementById("chatImportInput"),
+            undoDeleteButton: document.getElementById("undoDeleteButton"),
             clearButton: document.getElementById("clearButton"),
             providerLabel: document.getElementById("providerLabel"),
             chatTitle: document.getElementById("chatTitle"),
@@ -144,6 +165,9 @@
         renderAll();
         applyChatPageVisibility();
         autosizePrompt();
+        migrateAndHydrateChatImages().catch(function(error) {
+            setFeedback(explainError(error), "warn");
+        });
     }
 
     function bindEvents() {
@@ -169,6 +193,10 @@
             createChat(true);
             setSidebarOpen(false);
         });
+        elements.chatSearchInput.addEventListener("input", function() {
+            state.chatSearch = elements.chatSearchInput.value.trim();
+            renderChatList();
+        });
 
         elements.chatPresetSelect.addEventListener("change", function() {
             var presetId = elements.chatPresetSelect.value;
@@ -178,6 +206,7 @@
             }) || presetsApi.getActivePreset("chat");
             state.settings = presetsApi.applyChatPreset(state.settings, state.activeChatPreset);
             applySettingsToForm();
+            state.modelMetadataByName = {};
             renderModelOptions([]);
             clearFeedback();
             state.status = null;
@@ -207,6 +236,7 @@
             state.settings.model = "";
             elements.modelInput.value = "";
             saveActiveChatPresetFromCurrent();
+            state.modelMetadataByName = {};
             renderModelOptions([]);
             clearFeedback();
             state.status = null;
@@ -304,8 +334,28 @@
                 setStatus(explainError(error), "error");
             });
         });
+        elements.testModelCapabilitiesButton.addEventListener("click", function() {
+            testModelCapabilities().catch(function(error) {
+                setFeedback("能力测试失败：" + explainError(error), "error");
+            });
+        });
 
-        elements.exportButton.addEventListener("click", exportChats);
+        elements.importButton.addEventListener("click", function() {
+            elements.chatImportInput.click();
+        });
+        elements.chatImportInput.addEventListener("change", function() {
+            importChats(elements.chatImportInput.files[0]).catch(function(error) {
+                setFeedback("导入失败：" + explainError(error), "error");
+            }).finally(function() {
+                elements.chatImportInput.value = "";
+            });
+        });
+        elements.exportButton.addEventListener("click", function() {
+            exportChats().catch(function(error) {
+                setFeedback(explainError(error), "error");
+            });
+        });
+        elements.undoDeleteButton.addEventListener("click", undoDeleteChat);
         elements.clearButton.addEventListener("click", clearAllChats);
         elements.stopButton.addEventListener("click", stopGeneration);
 
@@ -360,6 +410,7 @@
         updateParameterVisibility();
         updateRequestPreview();
         updateProviderLabels();
+        updateModelCapabilityPanel();
     }
 
     function normalizeEndpointInput() {
@@ -425,6 +476,21 @@
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(safeSettings));
     }
 
+    function saveModelCapabilityResult(result) {
+        state.modelCapabilityCache[modelCapabilityCacheKey()] = Object.assign({
+            testedAt: new Date().toISOString()
+        }, result);
+    }
+
+    function modelCapabilityCacheKey() {
+        return [
+            state.settings.provider || "",
+            config.normalizeAddress(state.settings.endpoint || "", state.settings.provider || ""),
+            state.settings.openaiApi || "",
+            state.settings.model || ""
+        ].join("\n");
+    }
+
     function normalizeParameterSettings(settings) {
         settings.temperature = clampNumber(settings.temperature, 0, 2, defaultSettings.temperature);
         settings.maxTokens = parseTokenLimit(settings.maxTokens);
@@ -438,8 +504,7 @@
     }
 
     function loadApiKey() {
-        var presetKey = presetsApi.apiKeyForPreset(state.activeChatPreset);
-        return presetKey || localStorage.getItem(API_KEY) || "";
+        return presetsApi.apiKeyForPreset(state.activeChatPreset);
     }
 
     function loadChats() {
@@ -501,13 +566,72 @@
             return chat;
         });
         if (changed) {
-            localStorage.setItem(CHAT_KEY, JSON.stringify(normalized));
+            try {
+                localStorage.setItem(CHAT_KEY, JSON.stringify(serializeChats(normalized, { preserveLegacyDataUrl: true })));
+            } catch (error) {
+                if (!isQuotaError(error)) {
+                    throw error;
+                }
+                localStorage.setItem(CHAT_KEY, JSON.stringify(serializeChats(normalized, { preserveLegacyDataUrl: false })));
+            }
         }
         return normalized;
     }
 
     function saveChats() {
-        localStorage.setItem(CHAT_KEY, JSON.stringify(state.chats));
+        try {
+            localStorage.setItem(CHAT_KEY, JSON.stringify(serializeChats(state.chats, { preserveLegacyDataUrl: true })));
+        } catch (error) {
+            if (!isQuotaError(error)) {
+                throw error;
+            }
+            localStorage.setItem(CHAT_KEY, JSON.stringify(serializeChats(state.chats, { preserveLegacyDataUrl: false })));
+            if (elements.connectionFeedback) {
+                setFeedback("本地会话过大，已仅保留图片索引。旧图片如未完成迁移可能无法恢复。", "warn");
+            }
+        }
+    }
+
+    function serializeChats(chats, options) {
+        options = options || {};
+        return (chats || []).map(function(chat) {
+            var next = Object.assign({}, chat);
+            next.messages = (chat.messages || []).map(function(message) {
+                var serialized = Object.assign({}, message);
+                serialized.images = (message.images || []).map(function(image) {
+                    return serializeChatImage(image, options);
+                }).filter(Boolean);
+                return serialized;
+            });
+            return next;
+        });
+    }
+
+    function serializeChatImage(image, options) {
+        if (!image) {
+            return null;
+        }
+        var next = {};
+        [
+            "id",
+            "name",
+            "type",
+            "size",
+            "partial",
+            "previewIndex",
+            "createdAt",
+            "url"
+        ].forEach(function(key) {
+            if (image[key] !== undefined && image[key] !== null && image[key] !== "") {
+                next[key] = image[key];
+            }
+        });
+        if (options.includeDataUrl && image.dataUrl) {
+            next.dataUrl = image.dataUrl;
+        } else if (options.preserveLegacyDataUrl && !image.id && image.dataUrl) {
+            next.dataUrl = image.dataUrl;
+        }
+        return next;
     }
 
     function createChat(makeActive) {
@@ -551,6 +675,8 @@
         renderMessages();
         renderPendingImages();
         updateHeader();
+        updateContextMeter();
+        updateModelCapabilityPanel();
         updateSendState();
     }
 
@@ -608,9 +734,18 @@
 
     function renderChatList() {
         elements.chatList.textContent = "";
-        state.chats.forEach(function(chat) {
+        var chats = sortedFilteredChats();
+        if (!chats.length) {
+            var empty = document.createElement("div");
+            empty.className = "empty-state";
+            var emptyText = document.createElement("p");
+            emptyText.textContent = state.chatSearch ? "没有匹配的会话。" : "暂无会话。";
+            empty.appendChild(emptyText);
+            elements.chatList.appendChild(empty);
+        }
+        chats.forEach(function(chat) {
             var row = document.createElement("div");
-            row.className = "chat-row" + (chat.id === state.activeChatId ? " is-active" : "");
+            row.className = "chat-row" + (chat.id === state.activeChatId ? " is-active" : "") + (chat.pinned ? " is-pinned" : "");
 
             var button = document.createElement("button");
             button.type = "button";
@@ -622,11 +757,36 @@
             });
 
             var title = document.createElement("strong");
-            title.textContent = chat.title || "新会话";
+            title.textContent = (chat.pinned ? "置顶 · " : "") + (chat.title || "新会话");
             var time = document.createElement("span");
             time.textContent = ui.formatTime(chat.updatedAt);
             button.appendChild(title);
             button.appendChild(time);
+
+            var actions = document.createElement("div");
+            actions.className = "chat-row-actions";
+
+            var pinButton = document.createElement("button");
+            pinButton.type = "button";
+            pinButton.className = "chat-delete";
+            pinButton.textContent = chat.pinned ? "取消" : "置顶";
+            pinButton.title = chat.pinned ? "取消置顶" : "置顶会话";
+            pinButton.disabled = state.isSending;
+            pinButton.addEventListener("click", function(event) {
+                event.stopPropagation();
+                toggleChatPinned(chat.id);
+            });
+
+            var renameButton = document.createElement("button");
+            renameButton.type = "button";
+            renameButton.className = "chat-delete";
+            renameButton.textContent = "重命名";
+            renameButton.title = "重命名会话";
+            renameButton.disabled = state.isSending;
+            renameButton.addEventListener("click", function(event) {
+                event.stopPropagation();
+                renameChat(chat.id);
+            });
 
             var deleteButton = document.createElement("button");
             deleteButton.type = "button";
@@ -639,10 +799,73 @@
                 deleteChat(chat.id);
             });
 
+            actions.appendChild(pinButton);
+            actions.appendChild(renameButton);
+            actions.appendChild(deleteButton);
             row.appendChild(button);
-            row.appendChild(deleteButton);
+            row.appendChild(actions);
             elements.chatList.appendChild(row);
         });
+        elements.undoDeleteButton.disabled = !state.deletedChat || state.isSending;
+    }
+
+    function sortedFilteredChats() {
+        var query = state.chatSearch.toLowerCase();
+        return state.chats.filter(function(chat) {
+            if (!query) {
+                return true;
+            }
+            return chatSearchText(chat).toLowerCase().indexOf(query) !== -1;
+        }).sort(function(left, right) {
+            if (Boolean(left.pinned) !== Boolean(right.pinned)) {
+                return left.pinned ? -1 : 1;
+            }
+            return String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
+        });
+    }
+
+    function chatSearchText(chat) {
+        return [
+            chat.title || "",
+            (chat.messages || []).map(function(message) {
+                return message.content || "";
+            }).join(" ")
+        ].join(" ");
+    }
+
+    function toggleChatPinned(chatId) {
+        var chat = state.chats.find(function(item) {
+            return item.id === chatId;
+        });
+        if (!chat) {
+            return;
+        }
+        chat.pinned = !chat.pinned;
+        chat.updatedAt = new Date().toISOString();
+        saveChats();
+        renderChatList();
+    }
+
+    function renameChat(chatId) {
+        var chat = state.chats.find(function(item) {
+            return item.id === chatId;
+        });
+        if (!chat) {
+            return;
+        }
+        var title = prompt("重命名会话", chat.title || "新会话");
+        if (title === null) {
+            return;
+        }
+        title = title.trim();
+        if (!title) {
+            setFeedback("会话名称不能为空。", "warn");
+            return;
+        }
+        chat.title = title;
+        chat.updatedAt = new Date().toISOString();
+        saveChats();
+        renderAll();
     }
 
     function deleteChat(chatId) {
@@ -655,6 +878,13 @@
         if (!chat || !confirm("删除会话“" + (chat.title || "新会话") + "”？")) {
             return;
         }
+        var deletedIndex = state.chats.findIndex(function(item) {
+            return item.id === chatId;
+        });
+        state.deletedChat = {
+            chat: chat,
+            index: deletedIndex
+        };
         state.chats = state.chats.filter(function(item) {
             return item.id !== chatId;
         });
@@ -665,7 +895,27 @@
             state.activeChatId = state.chats[0].id;
         }
         saveChats();
+        pruneChatImages();
         renderAll();
+        setFeedback("已删除会话，可点击“撤销删除”恢复。", "warn");
+    }
+
+    function undoDeleteChat() {
+        if (!state.deletedChat || state.isSending) {
+            return;
+        }
+        var entry = state.deletedChat;
+        var exists = state.chats.some(function(chat) {
+            return chat.id === entry.chat.id;
+        });
+        if (!exists) {
+            state.chats.splice(Math.max(0, entry.index), 0, entry.chat);
+            state.activeChatId = entry.chat.id;
+            saveChats();
+        }
+        state.deletedChat = null;
+        renderAll();
+        setFeedback("已恢复删除的会话。", "ok");
     }
 
     function setSidebarOpen(open) {
@@ -745,6 +995,7 @@
                 messageId: message.id
             });
             restoreReasoningBlocks(container, message);
+            enhanceCodeBlocks(container);
             return;
         }
         container.textContent = content;
@@ -800,6 +1051,13 @@
         var wrap = document.createElement("div");
         wrap.className = "message-images";
         images.forEach(function(image) {
+            if (!image.dataUrl) {
+                var missing = document.createElement("span");
+                missing.className = "image-missing-label";
+                missing.textContent = image.id ? "图片加载中或已被清理" : "图片不可用";
+                wrap.appendChild(missing);
+                return;
+            }
             var img = document.createElement("img");
             img.src = image.dataUrl;
             img.alt = image.name || "图片";
@@ -817,6 +1075,9 @@
         actions.className = "message-actions";
 
         if (message.role === "user") {
+            actions.appendChild(messageActionButton("复制", function() {
+                copyMessage(message);
+            }));
             actions.appendChild(messageActionButton("编辑", function() {
                 state.editingMessageId = message.id;
                 renderMessages();
@@ -828,6 +1089,9 @@
                 deleteMessage(chat, message.id);
             }, "danger"));
         } else if (message.role === "assistant") {
+            actions.appendChild(messageActionButton("复制", function() {
+                copyMessage(message);
+            }));
             actions.appendChild(messageActionButton("重新生成", function() {
                 regenerateAssistant(chat, message.id);
             }));
@@ -844,6 +1108,60 @@
         }
 
         return actions;
+    }
+
+    function enhanceCodeBlocks(container) {
+        container.querySelectorAll("pre").forEach(function(pre) {
+            if (pre.querySelector(".code-copy-button")) {
+                return;
+            }
+            var code = pre.querySelector("code");
+            if (!code) {
+                return;
+            }
+            var button = document.createElement("button");
+            button.type = "button";
+            button.className = "ghost-button code-copy-button";
+            button.textContent = "复制";
+            button.addEventListener("click", function() {
+                copyText(code.textContent || "");
+            });
+            pre.appendChild(button);
+        });
+    }
+
+    function copyMessage(message) {
+        var text = [message.reasoning || "", message.content || ""].filter(Boolean).join("\n\n");
+        return copyText(text || "");
+    }
+
+    async function copyText(text) {
+        if (!text) {
+            setFeedback("没有可复制的内容。", "warn");
+            return;
+        }
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                fallbackCopyText(text);
+            }
+        } catch (error) {
+            fallbackCopyText(text);
+        }
+        setFeedback("已复制。", "ok");
+    }
+
+    function fallbackCopyText(text) {
+        var textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
     }
 
     function messageActionButton(label, onClick, tone) {
@@ -949,6 +1267,7 @@
             chat.title = "新会话";
         }
         saveChats();
+        pruneChatImages();
         renderAll();
         setFeedback("已删除这条消息。", "ok");
     }
@@ -968,6 +1287,7 @@
         markChatHistoryDirty(chat);
         chat.updatedAt = new Date().toISOString();
         saveChats();
+        pruneChatImages();
         renderAll();
         if (message.role === "user") {
             await requestAssistantForChat(chat);
@@ -1095,6 +1415,498 @@
             state.settings.openaiApi === "responses";
     }
 
+    function updateModelCapabilityPanel() {
+        if (!elements.modelCapabilityPanel) {
+            return;
+        }
+        var hasModel = Boolean(state.settings.model);
+        elements.modelCapabilityPanel.hidden = !hasModel;
+        if (!hasModel) {
+            return;
+        }
+        var result = capabilityResultForCurrentModel();
+        renderModelCapabilityResult(result);
+        elements.testModelCapabilitiesButton.disabled = state.isSending ||
+            state.isLoadingModels ||
+            state.isTestingCapabilities ||
+            !state.settings.model;
+    }
+
+    function capabilityResultForCurrentModel() {
+        var metadataResult = capabilitiesFromModelMetadata(currentModelMetadata());
+        var cachedResult = state.modelCapabilityCache[modelCapabilityCacheKey()] || {};
+        var activeResult = state.activeCapabilityTests || {};
+        return mergeCapabilityResults(mergeCapabilityResults(metadataResult, cachedResult), activeResult);
+    }
+
+    function renderModelCapabilityResult(result) {
+        elements.modelCapabilityList.textContent = "";
+        CAPABILITY_DEFS.forEach(function(def) {
+            var item = result[def.key] || unknownCapability();
+            var chip = document.createElement("div");
+            chip.className = "model-capability-chip is-" + (item.status || "unknown");
+            var label = document.createElement("span");
+            label.textContent = def.label;
+            var value = document.createElement("strong");
+            value.textContent = capabilityStatusText(item.status);
+            chip.title = item.detail || "";
+            chip.appendChild(label);
+            chip.appendChild(value);
+            elements.modelCapabilityList.appendChild(chip);
+        });
+        elements.modelCapabilityNote.textContent = capabilityNoteText(result);
+    }
+
+    function capabilityNoteText(result) {
+        var sources = CAPABILITY_DEFS.map(function(def) {
+            var item = result[def.key] || {};
+            return item.source || "";
+        }).filter(Boolean);
+        if (!sources.length) {
+            return "未检测";
+        }
+        return "来源：" + ui.uniqueValues(sources).join(" / ");
+    }
+
+    function capabilityStatusText(status) {
+        if (status === "supported") {
+            return "支持";
+        }
+        if (status === "probable") {
+            return "可能";
+        }
+        if (status === "unsupported") {
+            return "不支持";
+        }
+        if (status === "testing") {
+            return "测试中";
+        }
+        if (status === "error") {
+            return "失败";
+        }
+        return "未知";
+    }
+
+    function mergeCapabilityResults(base, override) {
+        var result = {};
+        CAPABILITY_DEFS.forEach(function(def) {
+            result[def.key] = Object.assign({}, unknownCapability(), base[def.key] || {});
+            if (override[def.key] && override[def.key].status !== "unknown") {
+                result[def.key] = Object.assign({}, result[def.key], override[def.key]);
+            }
+        });
+        return result;
+    }
+
+    function unknownCapability() {
+        return {
+            status: "unknown",
+            source: "",
+            detail: ""
+        };
+    }
+
+    function currentModelMetadata() {
+        return state.modelMetadataByName[state.settings.model] || null;
+    }
+
+    function capabilitiesFromModelMetadata(model) {
+        var result = {};
+        CAPABILITY_DEFS.forEach(function(def) {
+            result[def.key] = unknownCapability();
+        });
+        CAPABILITY_DEFS.forEach(function(def) {
+            var status = metadataCapabilityStatus(model, def.key);
+            if (status !== "unknown") {
+                result[def.key] = {
+                    status: status,
+                    source: "模型列表",
+                    detail: "来自 /models 返回的显式能力字段"
+                };
+            }
+        });
+        return result;
+    }
+
+    function metadataCapabilityStatus(model, capabilityKey) {
+        var status = "unknown";
+        if (!model || typeof model !== "object") {
+            return status;
+        }
+        [
+            "capabilities",
+            "supported_capabilities",
+            "supportedCapabilities",
+            "features",
+            "supported_features",
+            "supportedFeatures",
+            "modalities",
+            "input_modalities",
+            "inputModalities"
+        ].forEach(function(fieldKey) {
+            if (model[fieldKey] !== undefined) {
+                status = mergeMetadataCapabilityStatus(status, metadataCapabilityStatusFromValue(model[fieldKey], capabilityKey));
+            }
+        });
+        ["metadata", "details", "info"].forEach(function(nestedKey) {
+            if (model[nestedKey] && typeof model[nestedKey] === "object") {
+                status = mergeMetadataCapabilityStatus(status, metadataCapabilityStatus(model[nestedKey], capabilityKey));
+            }
+        });
+        return status;
+    }
+
+    function metadataCapabilityStatusFromValue(value, capabilityKey) {
+        if (Array.isArray(value)) {
+            var arrayStatus = "unknown";
+            value.forEach(function(item) {
+                if (typeof item === "string" || typeof item === "number") {
+                    if (capabilityTokenMatch([item], capabilityKey)) {
+                        arrayStatus = "supported";
+                    }
+                    return;
+                }
+                arrayStatus = mergeMetadataCapabilityStatus(arrayStatus, metadataCapabilityStatusFromValue(item, capabilityKey));
+            });
+            return arrayStatus;
+        }
+        if (value && typeof value === "object") {
+            var objectStatus = "unknown";
+            Object.keys(value).forEach(function(fieldKey) {
+                var item = value[fieldKey];
+                if (capabilityTokenMatch([fieldKey], capabilityKey)) {
+                    objectStatus = mergeMetadataCapabilityStatus(objectStatus, metadataStatusFromExplicitValue(item));
+                    return;
+                }
+                objectStatus = mergeMetadataCapabilityStatus(objectStatus, metadataCapabilityStatusFromValue(item, capabilityKey));
+            });
+            return objectStatus;
+        }
+        if (value !== undefined && value !== null) {
+            return capabilityTokenMatch([value], capabilityKey) ? "supported" : "unknown";
+        }
+        return "unknown";
+    }
+
+    function metadataStatusFromExplicitValue(value) {
+        if (typeof value === "string") {
+            value = value.toLowerCase();
+        }
+        if (value === false || value === "false" || value === "off" || value === "none") {
+            return "unsupported";
+        }
+        if (value === undefined || value === null) {
+            return "unknown";
+        }
+        if (Array.isArray(value)) {
+            return value.length ? "supported" : "unknown";
+        }
+        if (typeof value === "object") {
+            var keys = Object.keys(value);
+            if (Array.isArray(value.allowed_options) &&
+                    !value.allowed_options.some(function(option) {
+                        option = String(option || "").toLowerCase();
+                        return option && option !== "off" && option !== "none";
+                    })) {
+                return "unsupported";
+            }
+            var hasTrue = false;
+            var hasFalse = false;
+            keys.forEach(function(key) {
+                if (typeof value[key] === "boolean") {
+                    hasTrue = hasTrue || Boolean(value[key]);
+                    hasFalse = hasFalse || !value[key];
+                }
+            });
+            if (hasTrue) {
+                return "supported";
+            }
+            if (hasFalse && !hasTrue) {
+                return "unsupported";
+            }
+            return keys.length ? "supported" : "unknown";
+        }
+        return value ? "supported" : "unknown";
+    }
+
+    function mergeMetadataCapabilityStatus(current, next) {
+        if (current === "supported" || next === "supported") {
+            return "supported";
+        }
+        if (current === "unsupported" || next === "unsupported") {
+            return "unsupported";
+        }
+        return "unknown";
+    }
+
+    function capabilityTokenMatch(tokens, key) {
+        tokens = (tokens || []).map(function(token) {
+            return String(token || "").toLowerCase();
+        });
+        var text = tokens.join(" ");
+        if (key === "reasoning") {
+            return /reason|thinking|thought/.test(text);
+        }
+        if (key === "vision") {
+            return /vision|visual|multimodal|image[_ -]?input|input[_ -]?image/.test(text) ||
+                tokens.indexOf("image") !== -1 ||
+                tokens.indexOf("images") !== -1;
+        }
+        if (key === "tools") {
+            return /tool|function[_ -]?call|functioncall/.test(text);
+        }
+        return false;
+    }
+
+    async function testModelCapabilities() {
+        normalizeEndpointInput();
+        syncSettingsFromForm();
+        var validation = validateConnectionConfig({ requireModel: true });
+        if (!validation.valid) {
+            setStatus(validation.status, "error");
+            setFeedback(validation.message, validation.tone || "error");
+            return;
+        }
+        var result = {};
+        CAPABILITY_DEFS.forEach(function(def) {
+            result[def.key] = unknownCapability();
+        });
+        state.activeCapabilityTests = result;
+        state.isTestingCapabilities = true;
+        setButtonLoading(elements.testModelCapabilitiesButton, true, "测试中", "测试能力");
+        updateModelCapabilityPanel();
+        updateSendState();
+        try {
+            for (var index = 0; index < CAPABILITY_DEFS.length; index += 1) {
+                var def = CAPABILITY_DEFS[index];
+                result[def.key] = {
+                    status: "testing",
+                    source: "实测",
+                    detail: ""
+                };
+                state.activeCapabilityTests = result;
+                updateModelCapabilityPanel();
+                setFeedback("正在测试模型能力：" + def.label, "ok");
+                var tested = await runCapabilityProbe(def.key);
+                result[def.key] = tested;
+            }
+            saveModelCapabilityResult(result);
+            setFeedback("模型能力测试完成。", "ok");
+        } finally {
+            state.activeCapabilityTests = null;
+            state.isTestingCapabilities = false;
+            setButtonLoading(elements.testModelCapabilitiesButton, false, "测试中", "测试能力");
+            updateModelCapabilityPanel();
+            updateSendState();
+        }
+    }
+
+    async function runCapabilityProbe(key) {
+        try {
+            if (key === "reasoning") {
+                return await testReasoningCapability();
+            }
+            if (key === "vision") {
+                return await testVisionCapability();
+            }
+            if (key === "tools") {
+                return await testToolCapability();
+            }
+            return unknownCapability();
+        } catch (error) {
+            return capabilityFromError(error);
+        }
+    }
+
+    async function testReasoningCapability() {
+        var messages = [{
+            role: "user",
+            content: "Reply only OK."
+        }];
+        var response;
+        try {
+            response = await sendCapabilityTextProbe({
+                reasoning: true,
+                messages: messages
+            });
+        } catch (error) {
+            if (!isReasoningControlRejected(error)) {
+                throw error;
+            }
+            response = await sendCapabilityTextProbe({
+                messages: messages
+            });
+        }
+        if (String(response.reasoning || "").trim()) {
+            return capability("supported", "实测", "返回了 reasoning 内容");
+        }
+        if (/<\/?think/i.test(response.text || "")) {
+            return capability("supported", "实测", "返回了思考标签");
+        }
+        return capability("unsupported", "实测", "请求成功但未返回 reasoning 内容");
+    }
+
+    async function testVisionCapability() {
+        var response = await sendCapabilityTextProbe({
+            reasoningOff: true,
+            messages: [{
+                role: "user",
+                content: "The attached image is exactly one pixel. What color is the pixel? Reply with one lowercase English color word.",
+                images: [{
+                    name: "capability-test.png",
+                    type: "image/png",
+                    size: 69,
+                    dataUrl: TINY_PNG_DATA_URL
+                }]
+            }]
+        });
+        if (response.ok) {
+            return capability("supported", "实测", "图片问答成功");
+        }
+        return capability("unsupported", "实测", "图片输入请求失败");
+    }
+
+    async function testToolCapability() {
+        var provider = config.getProvider(state.settings.provider);
+        var response = await sendCapabilityToolProbe(provider);
+        var toolCalls = normalizeToolCalls(response.toolCalls);
+        return toolCalls.length ?
+            capability("supported", "实测", "模型返回了 tool_call") :
+            capability("unsupported", "实测", "请求成功但未返回 tool_call");
+    }
+
+    function capability(status, source, detail) {
+        return {
+            status: status,
+            source: source,
+            detail: detail || ""
+        };
+    }
+
+    function capabilityFromError(error) {
+        if (isCapabilityUnsupportedError(error)) {
+            return capability("unsupported", "实测", explainError(error));
+        }
+        return capability("error", "实测", explainError(error));
+    }
+
+    function isCapabilityUnsupportedError(error) {
+        var message = String(error && error.message || error || "").toLowerCase();
+        return message.indexOf("unsupported") !== -1 ||
+            message.indexOf("not support") !== -1 ||
+            message.indexOf("does not support") !== -1 ||
+            message.indexOf("invalid parameter") !== -1 ||
+            message.indexOf("unknown parameter") !== -1 ||
+            message.indexOf("unrecognized") !== -1 ||
+            message.indexOf("tool") !== -1 && message.indexOf("support") !== -1 ||
+            message.indexOf("image") !== -1 && message.indexOf("support") !== -1 ||
+            message.indexOf("vision") !== -1 && message.indexOf("support") !== -1 ||
+            message.indexOf("reasoning") !== -1 && message.indexOf("support") !== -1 ||
+            message.indexOf("不支持") !== -1;
+    }
+
+    function updateContextMeter() {
+        if (!elements.contextMeter) {
+            return;
+        }
+        var chat = getActiveChat();
+        var stats = estimateContextStats(chat);
+        var limit = modelContextLimit(state.settings.model);
+        var percent = limit ? Math.round(stats.tokens / limit * 100) : 0;
+        var text = "上下文估算：约 " + formatNumber(stats.tokens) + " tokens";
+        if (limit) {
+            text += " / " + formatNumber(limit) + "（" + Math.max(0, percent) + "%）";
+        }
+        if (stats.images) {
+            text += " · " + stats.images + " 张图片 · " + formatBytes(stats.imageBytes);
+        }
+        if (stats.tokens > limit * 0.85) {
+            text += " · 建议归档或删减旧消息";
+            elements.contextMeter.classList.add("is-warn");
+        } else {
+            elements.contextMeter.classList.remove("is-warn");
+        }
+        elements.contextMeter.textContent = text;
+    }
+
+    function estimateContextStats(chat) {
+        var chars = String(state.settings.systemPrompt || "").length;
+        var imageCount = 0;
+        var imageBytes = 0;
+        (chat && chat.messages || []).forEach(function(message) {
+            chars += String(message.content || "").length;
+            chars += String(message.reasoning || "").length;
+            (message.images || []).forEach(function(image) {
+                imageCount += 1;
+                imageBytes += image.size || dataUrlByteLength(image.dataUrl || "") || 0;
+            });
+        });
+        return {
+            tokens: Math.ceil(chars / 4) + imageCount * 1000,
+            images: imageCount,
+            imageBytes: imageBytes
+        };
+    }
+
+    function modelContextLimit(model) {
+        var name = String(model || "").toLowerCase();
+        if (!name) {
+            return 32768;
+        }
+        var match = name.match(/(\d+)\s*k/);
+        if (match) {
+            return parseInt(match[1], 10) * 1000;
+        }
+        if (name.indexOf("1m") !== -1 || name.indexOf("1000k") !== -1) {
+            return 1000000;
+        }
+        if (name.indexOf("claude") !== -1 || name.indexOf("200k") !== -1) {
+            return 200000;
+        }
+        if (name.indexOf("gpt-4.1") !== -1 || name.indexOf("gpt-4o") !== -1 || name.indexOf("gpt-5") !== -1) {
+            return 128000;
+        }
+        if (name.indexOf("128") !== -1) {
+            return 128000;
+        }
+        if (name.indexOf("64") !== -1) {
+            return 64000;
+        }
+        if (name.indexOf("32") !== -1) {
+            return 32000;
+        }
+        if (name.indexOf("16") !== -1) {
+            return 16000;
+        }
+        if (name.indexOf("8") !== -1) {
+            return 8000;
+        }
+        return 32768;
+    }
+
+    function dataUrlByteLength(dataUrl) {
+        var text = String(dataUrl || "");
+        var comma = text.indexOf(",");
+        if (comma === -1) {
+            return 0;
+        }
+        return Math.floor((text.length - comma - 1) * 3 / 4);
+    }
+
+    function formatBytes(bytes) {
+        if (!bytes) {
+            return "0 KB";
+        }
+        if (bytes < 1024 * 1024) {
+            return Math.max(1, Math.round(bytes / 1024)) + " KB";
+        }
+        return (bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0) + " MB";
+    }
+
+    function formatNumber(value) {
+        return String(value || 0).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    }
+
     function parameterCapabilitiesFor(provider) {
         if (provider.mode === "ollama") {
             return {
@@ -1192,6 +2004,10 @@
         elements.apiKeyInput.disabled = state.isSending;
         elements.attachButton.disabled = state.isSending;
         elements.loadModelsButton.disabled = state.isSending || state.isLoadingModels;
+        elements.testModelCapabilitiesButton.disabled = state.isSending ||
+            state.isLoadingModels ||
+            state.isTestingCapabilities ||
+            !state.settings.model;
         updateParameterVisibility();
         if (state.isSending) {
             toggleModelMenu(false);
@@ -1221,6 +2037,12 @@
         }
 
         var chat = getActiveChat();
+        try {
+            images = await persistChatImages(images, "chat-input");
+        } catch (error) {
+            setFeedback(explainError(error), "error");
+            return;
+        }
         var userMessage = createMessage("user", prompt, images);
         chat.messages.push(userMessage);
         chat.updatedAt = new Date().toISOString();
@@ -1268,6 +2090,11 @@
 
         try {
             await requestCompletion(chat, assistantMessage, requestOptions);
+            try {
+                await persistMessageImages(assistantMessage, "chat-output");
+            } catch (storageError) {
+                addResponseWarning(requestOptions, "图片本地持久化失败：" + explainError(storageError));
+            }
             if (continuingAssistant) {
                 assistantMessage.content = normalizeContinuationContent(assistantMessage.content, continuationPrefix);
             }
@@ -1327,6 +2154,7 @@
 
     async function requestCompletionOnce(chat, assistantMessage, options) {
         var provider = config.getProvider(state.settings.provider);
+        await hydrateChatImages(chat);
         var messages = buildMessages(chat, options);
         options = Object.assign({}, options, {
             messages: messages
@@ -2056,6 +2884,14 @@
     }
 
     function lmStudioOpenAiResponsesUrl() {
+        return config.endpointFor(lmStudioOpenAiBaseUrl(), "/responses");
+    }
+
+    function lmStudioOpenAiChatCompletionsUrl() {
+        return config.endpointFor(lmStudioOpenAiBaseUrl(), "/chat/completions");
+    }
+
+    function lmStudioOpenAiBaseUrl() {
         var restBase = config.normalizeAddress(state.settings.endpoint, "lmstudio");
         try {
             var url = new URL(restBase);
@@ -2066,8 +2902,7 @@
         } catch (error) {
             restBase = state.settings.endpoint;
         }
-        var openAiBase = config.normalizeAddress(restBase, "openai");
-        return config.endpointFor(openAiBase, "/responses");
+        return config.normalizeAddress(restBase, "openai");
     }
 
     async function requestOllama(messages, assistantMessage, options) {
@@ -2169,6 +3004,358 @@
         applyAssistantContent(assistantMessage, extractAnthropicText(data), options);
     }
 
+    async function sendCapabilityTextProbe(options) {
+        var provider = config.getProvider(state.settings.provider);
+        if (provider.mode === "ollama") {
+            return sendOllamaCapabilityProbe(options);
+        }
+        if (provider.mode === "lmstudioRest") {
+            return sendLmStudioCapabilityProbe(options);
+        }
+        if (provider.mode === "anthropic") {
+            return sendAnthropicCapabilityProbe(options);
+        }
+        if (state.settings.openaiApi === "responses" && provider.supportsResponses !== false) {
+            return sendOpenAiResponsesCapabilityProbe(options);
+        }
+        return sendOpenAiChatCapabilityProbe(options);
+    }
+
+    async function sendCapabilityToolProbe(provider) {
+        if (provider.mode === "ollama") {
+            return sendOllamaCapabilityProbe({
+                reasoningOff: true,
+                tools: true,
+                messages: [toolProbeMessage()]
+            });
+        }
+        if (provider.mode === "lmstudioRest") {
+            return sendOpenAiChatCapabilityProbe({
+                reasoningOff: true,
+                tools: true,
+                toolChoice: "required",
+                url: lmStudioOpenAiChatCompletionsUrl(),
+                messages: [toolProbeMessage()]
+            });
+        }
+        if (provider.mode === "anthropic") {
+            return sendAnthropicCapabilityProbe({
+                tools: true,
+                messages: [toolProbeMessage()]
+            });
+        }
+        return sendOpenAiChatCapabilityProbe({
+            reasoningOff: true,
+            tools: true,
+            toolChoice: "required",
+            forceChatCompletions: true,
+            messages: [toolProbeMessage()]
+        });
+    }
+
+    function toolProbeMessage() {
+        return {
+            role: "user",
+            content: "Call the capability_probe tool with ok=true. Do not answer in text."
+        };
+    }
+
+    async function sendOpenAiChatCapabilityProbe(options) {
+        var settings = options.forceChatCompletions ? Object.assign({}, state.settings, { openaiApi: "chat" }) : state.settings;
+        var url = options.url || config.requestUrlFor(settings, "chat");
+        var body = {
+            model: state.settings.model,
+            messages: options.messages.map(toOpenAiChatMessage),
+            temperature: 0,
+            stream: false
+        };
+        if (options.reasoning) {
+            body.reasoning_effort = "minimal";
+        } else if (options.reasoningOff) {
+            body.reasoning_effort = "none";
+        }
+        if (options.tools) {
+            body.tools = [openAiToolDefinition()];
+            body.tool_choice = options.toolChoice || "required";
+        }
+        var data = await fetchCapabilityJsonWithProbeRetries(url, {
+            method: "POST",
+            headers: requestHeaders({ auth: "bearer", json: true }),
+            body: JSON.stringify(body)
+        }, body, options, ["reasoning_effort"]);
+        var message = (((data.choices || [])[0] || {}).message || {});
+        return {
+            ok: true,
+            text: openAiMessageContent(message),
+            reasoning: markdown.reasoningTextFromObject(message),
+            toolCalls: normalizeToolCalls(message.tool_calls || message.toolCalls || message.function_call || message.functionCall)
+        };
+    }
+
+    async function sendOpenAiResponsesCapabilityProbe(options) {
+        var body = {
+            model: state.settings.model,
+            input: options.messages.map(toOpenAiResponseInput),
+            temperature: 0,
+            stream: false
+        };
+        if (options.reasoning) {
+            body.reasoning = {
+                effort: "minimal"
+            };
+        } else if (options.reasoningOff) {
+            body.reasoning = {
+                effort: "none"
+            };
+        }
+        var data = await fetchCapabilityJsonWithProbeRetries(config.requestUrlFor(state.settings, "chat"), {
+            method: "POST",
+            headers: requestHeaders({ auth: "bearer", json: true }),
+            body: JSON.stringify(body)
+        }, body, options, ["reasoning"]);
+        return {
+            ok: true,
+            text: extractOpenAiResponseText(data),
+            reasoning: extractOpenAiResponseReasoning(data),
+            toolCalls: extractOpenAiResponseToolCalls(data)
+        };
+    }
+
+    async function sendLmStudioCapabilityProbe(options) {
+        var latest = options.messages[options.messages.length - 1];
+        var body = {
+            model: state.settings.model,
+            input: toLmStudioInput(latest),
+            stream: false,
+            temperature: 0
+        };
+        if (options.reasoning) {
+            body.reasoning = lmStudioReasoningProbeValue();
+        } else if (options.reasoningOff) {
+            body.reasoning = "off";
+        }
+        var data = await fetchCapabilityJsonWithProbeRetries(config.requestUrlFor(state.settings, "chat"), {
+            method: "POST",
+            headers: requestHeaders({ auth: "bearer", json: true }),
+            body: JSON.stringify(body)
+        }, body, options, ["reasoning"]);
+        return {
+            ok: true,
+            text: extractLmStudioRestText(data),
+            reasoning: extractLmStudioRestReasoning(data),
+            toolCalls: []
+        };
+    }
+
+    async function sendOllamaCapabilityProbe(options) {
+        var body = {
+            model: state.settings.model,
+            messages: options.messages.map(toOllamaMessage),
+            stream: false,
+            options: {
+                temperature: 0
+            }
+        };
+        if (options.reasoning) {
+            body.think = true;
+        } else if (options.reasoningOff) {
+            body.think = false;
+        }
+        if (options.tools) {
+            body.tools = [ollamaToolDefinition()];
+        }
+        var data = await fetchCapabilityJsonWithProbeRetries(config.requestUrlFor(state.settings, "chat"), {
+            method: "POST",
+            headers: requestHeaders({ json: true }),
+            body: JSON.stringify(body)
+        }, body, options, ["think"]);
+        var message = data.message || {};
+        return {
+            ok: true,
+            text: message.content || data.response || "",
+            reasoning: message.thinking || data.thinking || "",
+            toolCalls: normalizeToolCalls(message.tool_calls || message.toolCalls || data.tool_calls || data.toolCalls)
+        };
+    }
+
+    async function sendAnthropicCapabilityProbe(options) {
+        var body = {
+            model: state.settings.model,
+            messages: options.messages.filter(function(message) {
+                return message.role !== "system";
+            }).map(toAnthropicMessage),
+            max_tokens: anthropicMaxTokens(),
+            temperature: 0,
+            stream: false
+        };
+        if (options.tools) {
+            body.tools = [anthropicToolDefinition()];
+            body.tool_choice = {
+                type: "tool",
+                name: "capability_probe"
+            };
+        }
+        var data = await fetchCapabilityJson(config.requestUrlFor(state.settings, "chat"), {
+            method: "POST",
+            headers: requestHeaders({ auth: "x-api-key", json: true, anthropicVersion: true }),
+            body: JSON.stringify(body)
+        });
+        return {
+            ok: true,
+            text: extractAnthropicText(data),
+            reasoning: extractAnthropicReasoning(data),
+            toolCalls: extractAnthropicToolCalls(data)
+        };
+    }
+
+    function openAiToolDefinition() {
+        return {
+            type: "function",
+            function: {
+                name: "capability_probe",
+                description: "Reports model tool-use capability.",
+                parameters: toolProbeSchema()
+            }
+        };
+    }
+
+    function ollamaToolDefinition() {
+        return openAiToolDefinition();
+    }
+
+    function anthropicToolDefinition() {
+        return {
+            name: "capability_probe",
+            description: "Reports model tool-use capability.",
+            input_schema: toolProbeSchema()
+        };
+    }
+
+    function toolProbeSchema() {
+        return {
+            type: "object",
+            properties: {
+                ok: {
+                    type: "boolean"
+                }
+            },
+            required: ["ok"]
+        };
+    }
+
+    function lmStudioReasoningProbeValue() {
+        var metadata = currentModelMetadata();
+        var reasoning = metadata &&
+            metadata.capabilities &&
+            metadata.capabilities.reasoning;
+        var allowed = reasoning && Array.isArray(reasoning.allowed_options) ? reasoning.allowed_options : [];
+        if (allowed.indexOf("on") !== -1) {
+            return "on";
+        }
+        if (allowed.indexOf("low") !== -1) {
+            return "low";
+        }
+        if (allowed.length) {
+            return allowed[0];
+        }
+        return "on";
+    }
+
+    async function fetchCapabilityJson(url, options) {
+        var controller = new AbortController();
+        var timer = window.setTimeout(function() {
+            controller.abort();
+        }, 30000);
+        try {
+            var response = await fetch(url, Object.assign({}, options, {
+                signal: controller.signal
+            }));
+            await ensureOk(response);
+            return await response.json();
+        } finally {
+            window.clearTimeout(timer);
+        }
+    }
+
+    async function fetchCapabilityJsonWithProbeRetries(url, requestOptions, body, options, reasoningFields) {
+        var reasoningRetried = false;
+        var toolChoiceRetried = false;
+        while (true) {
+            try {
+                return await fetchCapabilityJson(url, Object.assign({}, requestOptions, {
+                    body: JSON.stringify(body)
+                }));
+            } catch (error) {
+                if (options.reasoningOff && !reasoningRetried && isReasoningControlRejected(error)) {
+                    reasoningRetried = true;
+                    (reasoningFields || []).forEach(function(field) {
+                        delete body[field];
+                    });
+                    continue;
+                }
+                if (options.tools && !toolChoiceRetried && isToolChoiceRejected(error)) {
+                    toolChoiceRetried = true;
+                    toggleToolChoiceShape(body);
+                    continue;
+                }
+                throw error;
+            }
+        }
+    }
+
+    function isReasoningControlRejected(error) {
+        var message = error && error.message ? error.message : String(error);
+        return /reasoning|reasoning_effort|effort|think/i.test(message) &&
+            /unsupported|unknown|unrecognized|invalid|not supported|extra|none/i.test(message);
+    }
+
+    function isToolChoiceRejected(error) {
+        var message = error && error.message ? error.message : String(error);
+        return /tool_choice|tool choice|toolchoice/i.test(message) &&
+            /unsupported|unknown|unrecognized|invalid|not supported|must be|supported values/i.test(message);
+    }
+
+    function toggleToolChoiceShape(body) {
+        if (body.tool_choice === "required") {
+            body.tool_choice = {
+                type: "function",
+                function: {
+                    name: "capability_probe"
+                }
+            };
+            return;
+        }
+        body.tool_choice = "required";
+    }
+
+    function normalizeToolCalls(value) {
+        if (!value) {
+            return [];
+        }
+        if (Array.isArray(value)) {
+            return value.filter(Boolean);
+        }
+        return [value];
+    }
+
+    function extractOpenAiResponseToolCalls(data) {
+        if (!data || !Array.isArray(data.output)) {
+            return [];
+        }
+        return data.output.filter(function(item) {
+            return item && (item.type === "function_call" || item.type === "tool_call");
+        });
+    }
+
+    function extractAnthropicToolCalls(data) {
+        if (!data || !Array.isArray(data.content)) {
+            return [];
+        }
+        return data.content.filter(function(item) {
+            return item && item.type === "tool_use";
+        });
+    }
+
     function hasMessageContent(message) {
         return Boolean(
             message &&
@@ -2193,7 +3380,7 @@
                 text: message.content
             });
         }
-        message.images.forEach(function(image) {
+        message.images.filter(hasImageDataUrl).forEach(function(image) {
             content.push({
                 type: "image_url",
                 image_url: {
@@ -2201,6 +3388,12 @@
                 }
             });
         });
+        if (!content.length) {
+            return {
+                role: message.role,
+                content: message.content || ""
+            };
+        }
         return {
             role: message.role,
             content: content
@@ -2221,7 +3414,7 @@
                 text: message.content
             });
         }
-        (message.images || []).forEach(function(image) {
+        (message.images || []).filter(hasImageDataUrl).forEach(function(image) {
             content.push({
                 type: "input_image",
                 image_url: image.dataUrl
@@ -2242,7 +3435,7 @@
             type: "text",
             content: message.content || " "
         });
-        message.images.forEach(function(image) {
+        message.images.filter(hasImageDataUrl).forEach(function(image) {
             input.push({
                 type: "image",
                 data_url: image.dataUrl
@@ -2257,7 +3450,7 @@
             content: message.content
         };
         if (message.images && message.images.length && message.role !== "system") {
-            payload.images = message.images.map(function(image) {
+            payload.images = message.images.filter(hasImageDataUrl).map(function(image) {
                 return image.dataUrl.split(",")[1] || "";
             }).filter(Boolean);
         }
@@ -2278,7 +3471,7 @@
                 text: message.content
             });
         }
-        message.images.forEach(function(image) {
+        message.images.filter(hasImageDataUrl).forEach(function(image) {
             content.push({
                 type: "image",
                 source: {
@@ -2288,6 +3481,12 @@
                 }
             });
         });
+        if (!content.length) {
+            return {
+                role: message.role,
+                content: message.content || ""
+            };
+        }
         return {
             role: message.role,
             content: content
@@ -2700,7 +3899,9 @@
             });
             await ensureOk(response);
             var data = await response.json();
-            var models = extractModelNames(provider, data);
+            var modelItems = extractModelItems(provider, data);
+            state.modelMetadataByName = indexModelMetadata(provider, modelItems);
+            var models = extractModelNames(provider, data, modelItems);
             renderModelOptions(models);
             if (!state.settings.model && models.length) {
                 state.settings.model = models[0];
@@ -2708,6 +3909,7 @@
                 saveSettings();
                 updateProviderLabels();
             }
+            updateModelCapabilityPanel();
             setStatus(models.length ? "连接正常，已刷新模型列表" : "连接正常，但未返回模型列表", models.length ? "ok" : "warn");
             setFeedback(models.length ? "连接正常，已刷新模型列表。" : "连接正常，但未返回模型列表。", models.length ? "ok" : "warn");
             return models;
@@ -2781,20 +3983,31 @@
         };
     }
 
-    function extractModelNames(provider, data) {
+    function extractModelItems(provider, data) {
         if (provider.mode === "ollama") {
-            return ui.modelNamesFromItems(data.models || [], "chat");
+            return data.models || [];
         }
         if (provider.mode === "lmstudioRest" && Array.isArray(data.models)) {
-            return extractLmStudioModelNames(data.models);
+            return data.models;
         }
         if (Array.isArray(data.data)) {
-            return ui.modelNamesFromItems(data.data, "chat");
+            return data.data;
         }
         if (Array.isArray(data.models)) {
-            return ui.modelNamesFromItems(data.models, "chat");
+            return data.models;
         }
         return [];
+    }
+
+    function extractModelNames(provider, data, items) {
+        items = items || extractModelItems(provider, data);
+        if (provider.mode === "ollama") {
+            return ui.modelNamesFromItems(items, "chat");
+        }
+        if (provider.mode === "lmstudioRest" && Array.isArray(data.models)) {
+            return extractLmStudioModelNames(items);
+        }
+        return ui.modelNamesFromItems(items, "chat");
     }
 
     function extractLmStudioModelNames(models) {
@@ -2817,6 +4030,30 @@
         return ui.uniqueValues(loaded.concat(available));
     }
 
+    function indexModelMetadata(provider, models) {
+        var byName = {};
+        (models || []).forEach(function(model) {
+            if (!ui.isChatModelItem(model)) {
+                return;
+            }
+            var name = ui.modelNameFromItem(model);
+            if (name) {
+                byName[name] = model;
+            }
+            if (provider.mode === "lmstudioRest" && Array.isArray(model.loaded_instances)) {
+                model.loaded_instances.forEach(function(instance) {
+                    if (!instance || !instance.id) {
+                        return;
+                    }
+                    byName[instance.id] = Object.assign({}, model, instance, {
+                        parent_model: model
+                    });
+                });
+            }
+        });
+        return byName;
+    }
+
     function renderModelOptions(models) {
         modelPicker.render(models);
     }
@@ -2827,11 +4064,14 @@
         }
     }
 
-    function exportChats() {
+    async function exportChats() {
+        for (var index = 0; index < state.chats.length; index += 1) {
+            await hydrateChatImages(state.chats[index]);
+        }
         var payload = {
             exportedAt: new Date().toISOString(),
             settings: Object.assign({}, state.settings, { apiKey: undefined }),
-            chats: state.chats
+            chats: serializeChats(state.chats, { includeDataUrl: true })
         };
         var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
         var url = URL.createObjectURL(blob);
@@ -2844,6 +4084,69 @@
         URL.revokeObjectURL(url);
     }
 
+    async function importChats(file) {
+        if (!file) {
+            return;
+        }
+        if (!confirm("导入会话会把 JSON 中的会话记录追加到当前浏览器本地。请确认文件来源可信。")) {
+            return;
+        }
+        var payload = JSON.parse(await file.text());
+        var imported = chatsFromPayload(payload).map(normalizeImportedChat).filter(Boolean);
+        if (!imported.length) {
+            setFeedback("未找到可导入的会话。", "warn");
+            return;
+        }
+        state.chats = imported.concat(state.chats);
+        state.activeChatId = imported[0].id;
+        saveChats();
+        renderAll();
+        await migrateAndHydrateChatImages();
+        setFeedback("已导入 " + imported.length + " 个会话。", "ok");
+    }
+
+    function chatsFromPayload(payload) {
+        if (Array.isArray(payload)) {
+            return payload;
+        }
+        if (payload && Array.isArray(payload.chats)) {
+            return payload.chats;
+        }
+        return [];
+    }
+
+    function normalizeImportedChat(chat) {
+        if (!chat || typeof chat !== "object") {
+            return null;
+        }
+        var now = new Date().toISOString();
+        return {
+            id: "chat-imported-" + Date.now() + "-" + Math.random().toString(16).slice(2),
+            title: chat.title || "导入会话",
+            messages: Array.isArray(chat.messages) ? chat.messages.map(normalizeImportedMessage).filter(Boolean) : [],
+            pinned: Boolean(chat.pinned),
+            responsesState: null,
+            lmStudioRestState: null,
+            createdAt: chat.createdAt || now,
+            updatedAt: chat.updatedAt || now
+        };
+    }
+
+    function normalizeImportedMessage(message) {
+        if (!message || typeof message !== "object") {
+            return null;
+        }
+        return {
+            id: newMessageId(),
+            role: message.role === "assistant" || message.role === "system" ? message.role : "user",
+            content: String(message.content || ""),
+            reasoning: String(message.reasoning || ""),
+            reasoningComplete: Boolean(message.reasoningComplete),
+            images: Array.isArray(message.images) ? message.images.filter(Boolean) : [],
+            createdAt: message.createdAt || new Date().toISOString()
+        };
+    }
+
     function clearAllChats() {
         if (!confirm("清空所有本地会话记录？")) {
             return;
@@ -2852,6 +4155,7 @@
         createChat(false);
         state.activeChatId = state.chats[0].id;
         saveChats();
+        pruneChatImages();
         renderAll();
     }
 
@@ -2888,6 +4192,116 @@
         state.pendingImages = state.pendingImages.concat(loaded);
         renderPendingImages();
         setFeedback("已添加 " + loaded.length + " 张图片。", "ok");
+    }
+
+    async function migrateAndHydrateChatImages() {
+        var changed = false;
+        for (var chatIndex = 0; chatIndex < state.chats.length; chatIndex += 1) {
+            var chat = state.chats[chatIndex];
+            for (var messageIndex = 0; messageIndex < (chat.messages || []).length; messageIndex += 1) {
+                changed = await persistMessageImages(chat.messages[messageIndex], "chat-legacy") || changed;
+            }
+            await hydrateChatImages(chat);
+        }
+        if (changed) {
+            saveChats();
+        }
+        renderAll();
+        pruneChatImages();
+    }
+
+    async function persistMessageImages(message, source) {
+        if (!message || !Array.isArray(message.images) || !message.images.length) {
+            return false;
+        }
+        var changed = false;
+        for (var index = 0; index < message.images.length; index += 1) {
+            if (message.images[index] && message.images[index].dataUrl && !message.images[index].id) {
+                message.images[index] = await persistChatImage(message.images[index], source);
+                changed = true;
+            } else if (message.images[index] && message.images[index].dataUrl) {
+                attachTransientDataUrl(message.images[index], message.images[index].dataUrl);
+            }
+        }
+        return changed;
+    }
+
+    async function persistChatImages(images, source) {
+        var stored = [];
+        for (var index = 0; index < images.length; index += 1) {
+            stored.push(await persistChatImage(images[index], source));
+        }
+        return stored;
+    }
+
+    async function persistChatImage(image, source) {
+        if (!image || !image.dataUrl || image.id || !mediaStore) {
+            return image;
+        }
+        var type = image.type || mimeTypeFromDataUrl(image.dataUrl) || "image/png";
+        var blob = dataUrlToBlob(image.dataUrl, type);
+        var id = "chat-image-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        var name = image.name || "聊天图片";
+        var createdAt = image.createdAt || new Date().toISOString();
+        await mediaStore.putImage({
+            id: id,
+            blob: blob,
+            type: type,
+            name: name,
+            size: blob.size,
+            scope: "chat",
+            source: source || "chat",
+            createdAt: createdAt
+        });
+        return attachTransientDataUrl({
+            id: id,
+            name: name,
+            type: type,
+            size: blob.size,
+            partial: Boolean(image.partial),
+            previewIndex: image.previewIndex,
+            createdAt: createdAt
+        }, image.dataUrl);
+    }
+
+    async function hydrateChatImages(chat) {
+        if (!mediaStore || !chat || !Array.isArray(chat.messages)) {
+            return;
+        }
+        for (var messageIndex = 0; messageIndex < chat.messages.length; messageIndex += 1) {
+            var images = chat.messages[messageIndex].images || [];
+            for (var imageIndex = 0; imageIndex < images.length; imageIndex += 1) {
+                var image = images[imageIndex];
+                if (!image || image.dataUrl || !image.id) {
+                    continue;
+                }
+                try {
+                    var record = await mediaStore.getImage(image.id);
+                    if (record && record.blob) {
+                        attachTransientDataUrl(image, await blobToDataUrl(record.blob));
+                        image.type = image.type || record.type || record.blob.type || "image/png";
+                        image.name = image.name || record.name || "聊天图片";
+                        image.size = image.size || record.size || record.blob.size || 0;
+                    }
+                } catch (error) {
+                    image.missing = true;
+                }
+            }
+        }
+    }
+
+    function attachTransientDataUrl(image, dataUrl) {
+        if (!image || !dataUrl) {
+            return image;
+        }
+        delete image.dataUrl;
+        Object.defineProperty(image, "dataUrl", {
+            value: dataUrl,
+            writable: true,
+            configurable: true,
+            enumerable: false
+        });
+        return image;
     }
 
     async function handlePromptPaste(event) {
@@ -2927,6 +4341,63 @@
             return "AI";
         }
         return role;
+    }
+
+    function hasImageDataUrl(image) {
+        return Boolean(image && image.dataUrl);
+    }
+
+    function dataUrlToBlob(dataUrl, type) {
+        var parts = String(dataUrl || "").split(",");
+        var binary = atob(parts[1] || "");
+        var bytes = new Uint8Array(binary.length);
+        for (var index = 0; index < binary.length; index += 1) {
+            bytes[index] = binary.charCodeAt(index);
+        }
+        return new Blob([bytes], { type: type || mimeTypeFromDataUrl(dataUrl) || "image/png" });
+    }
+
+    function blobToDataUrl(blob) {
+        return new Promise(function(resolve, reject) {
+            var reader = new FileReader();
+            reader.onload = function() {
+                resolve(String(reader.result || ""));
+            };
+            reader.onerror = function() {
+                reject(new Error("图片读取失败。"));
+            };
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    function mimeTypeFromDataUrl(value) {
+        var match = /^data:([^;,]+)/i.exec(String(value || ""));
+        return match ? match[1] : "";
+    }
+
+    function isQuotaError(error) {
+        return Boolean(error && (
+            error.name === "QuotaExceededError" ||
+            error.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+            String(error.message || "").toLowerCase().indexOf("quota") !== -1
+        ));
+    }
+
+    function pruneChatImages() {
+        if (!mediaStore || typeof mediaStore.pruneImages !== "function") {
+            return;
+        }
+        var keepIds = [];
+        state.chats.forEach(function(chat) {
+            (chat.messages || []).forEach(function(message) {
+                (message.images || []).forEach(function(image) {
+                    if (image && image.id) {
+                        keepIds.push(image.id);
+                    }
+                });
+            });
+        });
+        mediaStore.pruneImages(keepIds, { scope: "chat" }).catch(function() {});
     }
 
     function optionalNumberValue(value) {

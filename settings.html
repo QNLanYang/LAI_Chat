@@ -15,6 +15,7 @@
     <script src="theme.js" defer></script>
     <script src="secrets.js" defer></script>
     <script src="presets.js" defer></script>
+    <script src="media-store.js" defer></script>
     <script src="ui-utils.js" defer></script>
     <script src="settings.js" defer></script>
 </head>
@@ -96,6 +97,29 @@
                 </div>
                 <div class="connection-feedback" id="settingsFeedback" aria-live="polite"></div>
             </section>
+
+            <section class="preset-panel settings storage-manager">
+                <div class="section-head">
+                    <h2>存储管理</h2>
+                    <button class="ghost-button" type="button" id="refreshStorageButton">刷新</button>
+                </div>
+                <div class="storage-stats" id="storageStats" aria-live="polite"></div>
+                <div class="row-actions">
+                    <button class="ghost-button" type="button" id="exportAllDataButton">导出全量数据</button>
+                    <button class="ghost-button" type="button" id="resetMigrationStateButton">重置迁移状态</button>
+                </div>
+                <div class="row-actions">
+                    <button class="ghost-button danger" type="button" id="clearImageCacheButton">清理图片缓存</button>
+                </div>
+            </section>
+
+            <details class="preset-panel settings danger-zone">
+                <summary>Danger Zone</summary>
+                <div class="danger-zone-body">
+                    <p class="danger-zone-text">清空本地数据会删除会话、Provider 预设、API Key、图片历史、IndexedDB 媒体文件和本地缓存。测试版升级后数据异常时再使用；操作前建议先导出 Provider 预设。</p>
+                    <button class="ghost-button danger" type="button" id="resetLocalDataButton">清空全部本地数据</button>
+                </div>
+            </details>
         </main>
     </div>
 </body>

@@ -7,7 +7,6 @@
     var mediaStore = window.LocalAiMediaStore;
     var ui = window.LocalAiUi;
     var IMAGE_KEY = config.STORAGE_KEYS.imageJobs;
-    var IMAGE_REQUEST_TIMEOUT_MS = 300000;
 
     var elements = {};
     var modelPicker = null;
@@ -18,6 +17,7 @@
         jobs: [],
         modelOptions: [],
         objectUrls: [],
+        abortController: null,
         isGenerating: false,
         isTesting: false,
         lastResponseWarnings: []
@@ -69,6 +69,7 @@
             referenceInput: document.getElementById("imageReferenceInput"),
             attachButton: document.getElementById("imageAttachButton"),
             clearButton: document.getElementById("imageClearButton"),
+            stopButton: document.getElementById("imageStopButton"),
             generateButton: document.getElementById("imageGenerateButton"),
             attachmentStrip: document.getElementById("imageAttachmentStrip"),
             feedback: document.getElementById("imageFeedback"),
@@ -196,6 +197,7 @@
                 setFeedback(explainError(error), "error");
             });
         });
+        elements.stopButton.addEventListener("click", stopImageGeneration);
         elements.form.addEventListener("submit", generateImage);
         elements.sizeModeSelect.addEventListener("change", function() {
             if (!state.activePreset) {
@@ -446,10 +448,8 @@
         state.lastResponseWarnings = [];
         updateGeneratingState();
         var abortController = new AbortController();
+        state.abortController = abortController;
         var signal = abortController.signal;
-        var timeoutId = setTimeout(function() {
-            abortController.abort();
-        }, IMAGE_REQUEST_TIMEOUT_MS);
         var statusTimer1 = setTimeout(function() {
             if (state.isGenerating) {
                 setFeedback("画图中，请勿刷新或离开页面...", "ok");
@@ -460,39 +460,56 @@
                 setFeedback("仍在生成中，请耐心等待，勿刷新页面...", "ok");
             }
         }, 60000);
+        var jobId = "image-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        var job = {
+            id: jobId,
+            provider: state.activePreset.provider,
+            model: state.activePreset.model,
+            prompt: rawPrompt,
+            size: selectedImageSize(),
+            status: "generating",
+            images: [],
+            createdAt: new Date().toISOString()
+        };
+        state.jobs.unshift(job);
+        state.jobs = state.jobs.slice(0, 40);
+        renderResults();
         setFeedback("正在请求，请勿刷新或离开页面...", "ok");
         try {
-            var images = await requestImages(requestPrompt, signal);
+            var images = await requestImages(requestPrompt, signal, job);
             if (!images.length) {
                 throw new Error("接口未返回图片。");
             }
-            var jobId = "image-" + Date.now() + "-" + Math.random().toString(16).slice(2);
             var storedImages = await storeGeneratedImages(jobId, images, rawPrompt);
-            var job = {
-                id: jobId,
-                provider: state.activePreset.provider,
-                model: state.activePreset.model,
-                prompt: rawPrompt,
-                size: selectedImageSize(),
-                images: storedImages,
-                createdAt: new Date().toISOString()
-            };
-            state.jobs.unshift(job);
-            state.jobs = state.jobs.slice(0, 40);
+            job.status = "done";
+            job.images = storedImages;
             saveJobs();
             pruneStoredImages();
             renderResults();
             setFeedback(state.lastResponseWarnings.length ? "生成完成。" + state.lastResponseWarnings.join(" ") : "生成完成。", state.lastResponseWarnings.length ? "warn" : "ok");
         } catch (error) {
             if (error.name === "AbortError") {
-                setFeedback("请求超时（" + Math.round(IMAGE_REQUEST_TIMEOUT_MS / 60000) + "分钟），请稍后重试。", "error");
+                job.status = "stopped";
+                if (!job.images.length) {
+                    state.jobs = state.jobs.filter(function(item) {
+                        return item.id !== job.id;
+                    });
+                } else {
+                    saveJobs();
+                }
+                renderResults();
+                setFeedback("已停止生成。", "warn");
             } else {
+                state.jobs = state.jobs.filter(function(item) {
+                    return item.id !== job.id;
+                });
+                renderResults();
                 setFeedback(explainError(error), "error");
             }
         } finally {
-            clearTimeout(timeoutId);
             clearTimeout(statusTimer1);
             clearTimeout(statusTimer2);
+            state.abortController = null;
             state.isGenerating = false;
             updateGeneratingState();
             updateStatus();
@@ -544,18 +561,18 @@
         }
     }
 
-    async function requestImages(prompt, signal) {
+    async function requestImages(prompt, signal, job) {
         var provider = config.getImageProvider(state.activePreset.provider);
         if (provider.mode === "geminiImages") {
             return requestGeminiImages(prompt, signal);
         }
         if (state.references.length) {
-            return requestOpenAiImageEdit(prompt, signal);
+            return requestOpenAiImageEdit(prompt, signal, job);
         }
-        return requestOpenAiImageGeneration(prompt, signal);
+        return requestOpenAiImageGeneration(prompt, signal, job);
     }
 
-    async function requestOpenAiImageGeneration(prompt, signal) {
+    async function requestOpenAiImageGeneration(prompt, signal, job) {
         var requestSize = requestImageSize();
         var provider = config.getImageProvider(state.activePreset.provider);
         var body = {
@@ -582,10 +599,10 @@
             signal: signal
         });
         await ensureOk(response);
-        return handleOpenAiImageResponse(response, body);
+        return handleOpenAiImageResponse(response, body, job);
     }
 
-    async function requestOpenAiImageEdit(prompt, signal) {
+    async function requestOpenAiImageEdit(prompt, signal, job) {
         var requestSize = requestImageSize();
         var provider = config.getImageProvider(state.activePreset.provider);
         var form = new FormData();
@@ -614,7 +631,7 @@
             signal: signal
         });
         await ensureOk(response);
-        return handleOpenAiImageResponse(response, requestOptions);
+        return handleOpenAiImageResponse(response, requestOptions, job);
     }
 
     function applyOpenAiGenerationOptions(body, provider) {
@@ -741,17 +758,17 @@
         modelPicker.focusFirst();
     }
 
-    async function handleOpenAiImageResponse(response, requestOptions) {
+    async function handleOpenAiImageResponse(response, requestOptions, job) {
         var contentType = response.headers.get("content-type") || "";
         if (contentType.indexOf("text/event-stream") !== -1) {
             setFeedback("接收中，请勿刷新或离开页面...", "ok");
-            return extractOpenAiStreamImages(response, requestOptions);
+            return extractOpenAiStreamImages(response, requestOptions, job);
         }
         setFeedback("接收中...", "ok");
         return extractOpenAiImages(await response.json(), requestOptions);
     }
 
-    async function extractOpenAiStreamImages(response, requestOptions) {
+    async function extractOpenAiStreamImages(response, requestOptions, job) {
         if (!response.body || !response.body.getReader) {
             throw new Error("当前浏览器不支持读取流式图片响应。");
         }
@@ -776,6 +793,7 @@
                 var partial = extractOpenAiPartialImage(payload, requestOptions);
                 if (partial) {
                     images = [partial];
+                    applyImageJobPreview(job, partial);
                     return;
                 }
                 var eventImages = extractOpenAiImages(payload, requestOptions, { skipWarnings: true });
@@ -800,6 +818,21 @@
             state.lastResponseWarnings.push("上游使用了流式响应，但没有回显可对比的最终参数。");
         }
         return images;
+    }
+
+    function applyImageJobPreview(job, dataUrl) {
+        if (!job || !dataUrl) {
+            return;
+        }
+        job.images = [{
+            id: "",
+            dataUrl: dataUrl,
+            type: mimeTypeFromDataUrl(dataUrl) || "image/png",
+            name: "生成预览",
+            size: 0,
+            partial: true
+        }];
+        renderResults();
     }
 
     function extractOpenAiPartialImage(payload, requestOptions) {
@@ -1478,11 +1511,11 @@
         }
         state.jobs.forEach(function(job) {
             var article = document.createElement("article");
-            article.className = "image-job";
+            article.className = "image-job" + (job.status ? " is-" + job.status : "");
             var meta = document.createElement("div");
             meta.className = "image-job-meta";
             var metaText = document.createElement("span");
-            metaText.textContent = job.model + " · " + ui.formatTime(job.createdAt);
+            metaText.textContent = job.model + " · " + ui.formatTime(job.createdAt) + statusTextForJob(job);
             var deleteBtn = document.createElement("button");
             deleteBtn.type = "button";
             deleteBtn.className = "ghost-button image-job-delete";
@@ -1498,6 +1531,12 @@
             prompt.textContent = job.prompt;
             var grid = document.createElement("div");
             grid.className = "image-grid";
+            if (!job.images.length && job.status === "generating") {
+                var pending = document.createElement("div");
+                pending.className = "image-placeholder";
+                pending.textContent = "生成中";
+                grid.appendChild(pending);
+            }
             job.images.forEach(function(image) {
                 var src = image.objectUrl || image.dataUrl || image.url || "";
                 var frame = document.createElement("div");
@@ -1513,6 +1552,10 @@
                     var img = document.createElement("img");
                     img.src = src;
                     img.alt = image.name || job.prompt;
+                    if (image.partial) {
+                        img.className = "is-partial";
+                        img.title = "流式预览";
+                    }
                     link.appendChild(img);
                 } else {
                     var placeholder = document.createElement("div");
@@ -1546,6 +1589,16 @@
         });
     }
 
+    function statusTextForJob(job) {
+        if (job.status === "generating") {
+            return " · 生成中";
+        }
+        if (job.status === "stopped") {
+            return " · 已停止";
+        }
+        return "";
+    }
+
     function deleteJob(jobId) {
         if (state.isGenerating) {
             return;
@@ -1562,6 +1615,12 @@
         saveJobs();
         pruneStoredImages();
         renderResults();
+    }
+
+    function stopImageGeneration() {
+        if (state.abortController) {
+            state.abortController.abort();
+        }
     }
 
     async function addReferenceFiles(fileList) {
@@ -1613,6 +1672,7 @@
                 blob: blob,
                 type: type,
                 name: name,
+                scope: "image-job",
                 createdAt: new Date().toISOString()
             });
             return {
@@ -1836,6 +1896,7 @@
                     type: image.type || "",
                     name: image.name || "",
                     size: image.size || 0,
+                    partial: Boolean(image.partial),
                     missing: Boolean(image.missing)
                 };
             })
@@ -1877,13 +1938,14 @@
                 }
             });
         });
-        mediaStore.pruneImages(keepIds).catch(function() {});
+        mediaStore.pruneImages(keepIds, { scope: "image-job" }).catch(function() {});
     }
 
     function updateGeneratingState() {
         var hasPreset = Boolean(state.activePreset && state.activePreset.provider);
         ui.setButtonLoading(elements.generateButton, state.isGenerating, "生成中", "生成");
         elements.generateButton.disabled = state.isGenerating || !hasPreset;
+        elements.stopButton.disabled = !state.isGenerating;
         ui.setButtonLoading(elements.testButton, state.isTesting, "测试中", "测试连接/模型");
         elements.testButton.disabled = state.isGenerating || state.isTesting || !hasPreset;
         elements.providerSelect.disabled = state.isGenerating || state.isTesting || !state.activePreset;
