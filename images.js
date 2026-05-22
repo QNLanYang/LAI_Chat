@@ -6,6 +6,7 @@
     var secrets = window.LocalAiSecrets;
     var mediaStore = window.LocalAiMediaStore;
     var ui = window.LocalAiUi;
+    var imageResponse = window.LocalAiImageResponse;
     var IMAGE_KEY = config.STORAGE_KEYS.imageJobs;
 
     var elements = {};
@@ -708,7 +709,7 @@
             signal: signal
         });
         await ensureOk(response);
-        return extractGeminiImages(await response.json());
+        return imageResponse.extractGeminiImages(await response.json());
     }
 
     function imageHeaders(options) {
@@ -759,65 +760,19 @@
     }
 
     async function handleOpenAiImageResponse(response, requestOptions, job) {
-        var contentType = response.headers.get("content-type") || "";
-        if (contentType.indexOf("text/event-stream") !== -1) {
-            setFeedback("接收中，请勿刷新或离开页面...", "ok");
-            return extractOpenAiStreamImages(response, requestOptions, job);
-        }
-        setFeedback("接收中...", "ok");
-        return extractOpenAiImages(await response.json(), requestOptions);
+        return imageResponse.handleOpenAiImageResponse(response, requestOptions, imageResponseHooks(job));
     }
 
-    async function extractOpenAiStreamImages(response, requestOptions, job) {
-        if (!response.body || !response.body.getReader) {
-            throw new Error("当前浏览器不支持读取流式图片响应。");
-        }
-        var reader = response.body.getReader();
-        var decoder = new TextDecoder();
-        var buffer = "";
-        var images = [];
-        var finalPayload = null;
-        while (true) {
-            var chunk = await reader.read();
-            if (chunk.done) {
-                break;
+    function imageResponseHooks(job) {
+        return {
+            onStatus: setFeedback,
+            onWarning: function(message) {
+                state.lastResponseWarnings.push(message);
+            },
+            onPartialImage: function(dataUrl) {
+                applyImageJobPreview(job, dataUrl);
             }
-            buffer += decoder.decode(chunk.value, { stream: true });
-            var parts = buffer.split("\n\n");
-            buffer = parts.pop() || "";
-            parts.forEach(function(part) {
-                var payload = parseSsePayload(part);
-                if (!payload) {
-                    return;
-                }
-                var partial = extractOpenAiPartialImage(payload, requestOptions);
-                if (partial) {
-                    images = [partial];
-                    applyImageJobPreview(job, partial);
-                    return;
-                }
-                var eventImages = extractOpenAiImages(payload, requestOptions, { skipWarnings: true });
-                if (eventImages.length) {
-                    images = eventImages;
-                    finalPayload = payload;
-                }
-            });
-        }
-        buffer += decoder.decode();
-        var payload = parseSsePayload(buffer);
-        if (payload) {
-            var lastImages = extractOpenAiImages(payload, requestOptions, { skipWarnings: true });
-            if (lastImages.length) {
-                images = lastImages;
-                finalPayload = payload;
-            }
-        }
-        if (finalPayload) {
-            collectOpenAiResponseWarnings(finalPayload, requestOptions);
-        } else if (requestOptions && requestOptions.stream) {
-            state.lastResponseWarnings.push("上游使用了流式响应，但没有回显可对比的最终参数。");
-        }
-        return images;
+        };
     }
 
     function applyImageJobPreview(job, dataUrl) {
@@ -833,137 +788,6 @@
             partial: true
         }];
         renderResults();
-    }
-
-    function extractOpenAiPartialImage(payload, requestOptions) {
-        var image = payload && (payload.partial_image_b64 || payload.partial_image);
-        if (!image || String(payload.type || "").toLowerCase().indexOf("partial_image") === -1) {
-            return "";
-        }
-        var type = imageTypeFromFormat(payload.output_format || requestOptions && requestOptions.output_format) || "image/png";
-        return "data:" + type + ";base64," + image;
-    }
-
-    function parseSsePayload(part) {
-        var lines = String(part || "").split(/\r?\n/);
-        var dataLines = [];
-        lines.forEach(function(line) {
-            if (line.indexOf("data:") === 0) {
-                dataLines.push(line.slice(5).trim());
-            }
-        });
-        var text = dataLines.join("\n").trim();
-        if (!text || text === "[DONE]") {
-            return null;
-        }
-        try {
-            return JSON.parse(text);
-        } catch (error) {
-            return null;
-        }
-    }
-
-    function extractOpenAiImages(data, requestOptions, options) {
-        var responseType = imageTypeFromFormat(data && data.output_format);
-        if (!options || !options.skipWarnings) {
-            collectOpenAiResponseWarnings(data, requestOptions);
-        }
-        return imageItemsFromOpenAiResponse(data).map(function(item) {
-            var itemType = imageTypeFromFormat(item.output_format) || responseType || "image/png";
-            if (item.b64_json) {
-                return "data:" + itemType + ";base64," + item.b64_json;
-            }
-            if (item.image_base64 || item.b64) {
-                return "data:" + itemType + ";base64," + (item.image_base64 || item.b64);
-            }
-            return item.url || "";
-        }).filter(Boolean);
-    }
-
-    function imageItemsFromOpenAiResponse(data) {
-        if (!data) {
-            return [];
-        }
-        if (Array.isArray(data.data)) {
-            return data.data;
-        }
-        if (data.b64_json || data.url || data.image_base64 || data.b64) {
-            return [data];
-        }
-        if (data.result && (data.result.b64_json || data.result.url || data.result.image_base64 || data.result.b64)) {
-            return [data.result];
-        }
-        if (Array.isArray(data.output)) {
-            return data.output.filter(function(item) {
-                return item && (item.b64_json || item.url || item.image_base64 || item.b64);
-            });
-        }
-        return [];
-    }
-
-    function collectOpenAiResponseWarnings(data, requestOptions) {
-        if (!requestOptions || !data) {
-            return;
-        }
-        var responseOptions = responseOptionsFromPayload(data);
-        var comparable = ["size", "quality", "background", "output_format", "output_compression", "moderation"];
-        var mismatches = [];
-        var sawAnyOption = false;
-        comparable.forEach(function(key) {
-            if (responseOptions[key] !== undefined && responseOptions[key] !== null && responseOptions[key] !== "") {
-                sawAnyOption = true;
-            }
-            if (requestOptions[key] !== undefined &&
-                requestOptions[key] !== null &&
-                requestOptions[key] !== "" &&
-                responseOptions[key] !== undefined &&
-                responseOptions[key] !== null &&
-                responseOptions[key] !== "" &&
-                String(requestOptions[key]) !== String(responseOptions[key])) {
-                mismatches.push(key + ": " + requestOptions[key] + " -> " + responseOptions[key]);
-            }
-        });
-        if (mismatches.length) {
-            state.lastResponseWarnings.push("上游返回参数与请求不一致，可能已降级：" + mismatches.join("，") + "。");
-            return;
-        }
-        if (!sawAnyOption && (imageItemsFromOpenAiResponse(data).length || data.usage)) {
-            state.lastResponseWarnings.push("上游未回显生成参数，无法确认是否按请求执行。");
-        }
-    }
-
-    function responseOptionsFromPayload(data) {
-        var first = imageItemsFromOpenAiResponse(data)[0] || {};
-        return {
-            size: data.size || first.size,
-            quality: data.quality || first.quality,
-            background: data.background || first.background,
-            output_format: data.output_format || first.output_format,
-            output_compression: data.output_compression || first.output_compression,
-            moderation: data.moderation || first.moderation
-        };
-    }
-
-    function imageTypeFromFormat(format) {
-        var value = String(format || "").toLowerCase();
-        if (value === "jpg") {
-            value = "jpeg";
-        }
-        return ["png", "jpeg", "webp"].indexOf(value) !== -1 ? "image/" + value : "";
-    }
-
-    function extractGeminiImages(data) {
-        var images = [];
-        (data.candidates || []).forEach(function(candidate) {
-            var parts = candidate.content && candidate.content.parts || [];
-            parts.forEach(function(part) {
-                var inline = part.inlineData || part.inline_data;
-                if (inline && inline.data) {
-                    images.push("data:" + (inline.mimeType || inline.mime_type || "image/png") + ";base64," + inline.data);
-                }
-            });
-        });
-        return images;
     }
 
     function imageCount() {

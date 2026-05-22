@@ -7,16 +7,12 @@
     var secrets = window.LocalAiSecrets;
     var ui = window.LocalAiUi;
     var mediaStore = window.LocalAiMediaStore;
+    var capabilityTester = window.LocalAiCapabilityTester;
     var CHAT_KEY = config.STORAGE_KEYS.chats;
     var SETTINGS_KEY = config.STORAGE_KEYS.settings;
     var providerDefaults = config.PROVIDERS;
     var defaultSettings = config.DEFAULT_SETTINGS;
-    var CAPABILITY_DEFS = [
-        { key: "reasoning", label: "推理" },
-        { key: "vision", label: "视觉" },
-        { key: "tools", label: "工具" }
-    ];
-    var TINY_PNG_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2P8z8DwHwAFBQIAHl6u2QAAAABJRU5ErkJggg==";
+    var CAPABILITY_DEFS = capabilityTester.DEFS;
 
     var elements = {};
     var modelPicker = null;
@@ -1433,10 +1429,13 @@
     }
 
     function capabilityResultForCurrentModel() {
-        var metadataResult = capabilitiesFromModelMetadata(currentModelMetadata());
+        var metadataResult = capabilityTester.capabilitiesFromModelMetadata(currentModelMetadata());
         var cachedResult = state.modelCapabilityCache[modelCapabilityCacheKey()] || {};
         var activeResult = state.activeCapabilityTests || {};
-        return mergeCapabilityResults(mergeCapabilityResults(metadataResult, cachedResult), activeResult);
+        return capabilityTester.mergeCapabilityResults(
+            capabilityTester.mergeCapabilityResults(metadataResult, cachedResult),
+            activeResult
+        );
     }
 
     function renderModelCapabilityResult(result) {
@@ -1469,193 +1468,47 @@
     }
 
     function capabilityStatusText(status) {
-        if (status === "supported") {
-            return "支持";
-        }
-        if (status === "probable") {
-            return "可能";
-        }
-        if (status === "unsupported") {
-            return "不支持";
-        }
-        if (status === "testing") {
-            return "测试中";
-        }
-        if (status === "error") {
-            return "失败";
-        }
-        return "未知";
+        return capabilityTester.capabilityStatusText(status);
     }
 
     function mergeCapabilityResults(base, override) {
-        var result = {};
-        CAPABILITY_DEFS.forEach(function(def) {
-            result[def.key] = Object.assign({}, unknownCapability(), base[def.key] || {});
-            if (override[def.key] && override[def.key].status !== "unknown") {
-                result[def.key] = Object.assign({}, result[def.key], override[def.key]);
-            }
-        });
-        return result;
+        return capabilityTester.mergeCapabilityResults(base, override);
     }
 
     function unknownCapability() {
-        return {
-            status: "unknown",
-            source: "",
-            detail: ""
-        };
+        return capabilityTester.unknownCapability();
     }
 
     function currentModelMetadata() {
         return state.modelMetadataByName[state.settings.model] || null;
     }
 
-    function capabilitiesFromModelMetadata(model) {
-        var result = {};
-        CAPABILITY_DEFS.forEach(function(def) {
-            result[def.key] = unknownCapability();
-        });
-        CAPABILITY_DEFS.forEach(function(def) {
-            var status = metadataCapabilityStatus(model, def.key);
-            if (status !== "unknown") {
-                result[def.key] = {
-                    status: status,
-                    source: "模型列表",
-                    detail: "来自 /models 返回的显式能力字段"
-                };
-            }
-        });
-        return result;
-    }
-
-    function metadataCapabilityStatus(model, capabilityKey) {
-        var status = "unknown";
-        if (!model || typeof model !== "object") {
-            return status;
-        }
-        [
-            "capabilities",
-            "supported_capabilities",
-            "supportedCapabilities",
-            "features",
-            "supported_features",
-            "supportedFeatures",
-            "modalities",
-            "input_modalities",
-            "inputModalities"
-        ].forEach(function(fieldKey) {
-            if (model[fieldKey] !== undefined) {
-                status = mergeMetadataCapabilityStatus(status, metadataCapabilityStatusFromValue(model[fieldKey], capabilityKey));
-            }
-        });
-        ["metadata", "details", "info"].forEach(function(nestedKey) {
-            if (model[nestedKey] && typeof model[nestedKey] === "object") {
-                status = mergeMetadataCapabilityStatus(status, metadataCapabilityStatus(model[nestedKey], capabilityKey));
-            }
-        });
-        return status;
-    }
-
-    function metadataCapabilityStatusFromValue(value, capabilityKey) {
-        if (Array.isArray(value)) {
-            var arrayStatus = "unknown";
-            value.forEach(function(item) {
-                if (typeof item === "string" || typeof item === "number") {
-                    if (capabilityTokenMatch([item], capabilityKey)) {
-                        arrayStatus = "supported";
-                    }
-                    return;
-                }
-                arrayStatus = mergeMetadataCapabilityStatus(arrayStatus, metadataCapabilityStatusFromValue(item, capabilityKey));
-            });
-            return arrayStatus;
-        }
-        if (value && typeof value === "object") {
-            var objectStatus = "unknown";
-            Object.keys(value).forEach(function(fieldKey) {
-                var item = value[fieldKey];
-                if (capabilityTokenMatch([fieldKey], capabilityKey)) {
-                    objectStatus = mergeMetadataCapabilityStatus(objectStatus, metadataStatusFromExplicitValue(item));
-                    return;
-                }
-                objectStatus = mergeMetadataCapabilityStatus(objectStatus, metadataCapabilityStatusFromValue(item, capabilityKey));
-            });
-            return objectStatus;
-        }
-        if (value !== undefined && value !== null) {
-            return capabilityTokenMatch([value], capabilityKey) ? "supported" : "unknown";
-        }
-        return "unknown";
-    }
-
-    function metadataStatusFromExplicitValue(value) {
-        if (typeof value === "string") {
-            value = value.toLowerCase();
-        }
-        if (value === false || value === "false" || value === "off" || value === "none") {
-            return "unsupported";
-        }
-        if (value === undefined || value === null) {
-            return "unknown";
-        }
-        if (Array.isArray(value)) {
-            return value.length ? "supported" : "unknown";
-        }
-        if (typeof value === "object") {
-            var keys = Object.keys(value);
-            if (Array.isArray(value.allowed_options) &&
-                    !value.allowed_options.some(function(option) {
-                        option = String(option || "").toLowerCase();
-                        return option && option !== "off" && option !== "none";
-                    })) {
-                return "unsupported";
-            }
-            var hasTrue = false;
-            var hasFalse = false;
-            keys.forEach(function(key) {
-                if (typeof value[key] === "boolean") {
-                    hasTrue = hasTrue || Boolean(value[key]);
-                    hasFalse = hasFalse || !value[key];
-                }
-            });
-            if (hasTrue) {
-                return "supported";
-            }
-            if (hasFalse && !hasTrue) {
-                return "unsupported";
-            }
-            return keys.length ? "supported" : "unknown";
-        }
-        return value ? "supported" : "unknown";
-    }
-
-    function mergeMetadataCapabilityStatus(current, next) {
-        if (current === "supported" || next === "supported") {
-            return "supported";
-        }
-        if (current === "unsupported" || next === "unsupported") {
-            return "unsupported";
-        }
-        return "unknown";
-    }
-
-    function capabilityTokenMatch(tokens, key) {
-        tokens = (tokens || []).map(function(token) {
-            return String(token || "").toLowerCase();
-        });
-        var text = tokens.join(" ");
-        if (key === "reasoning") {
-            return /reason|thinking|thought/.test(text);
-        }
-        if (key === "vision") {
-            return /vision|visual|multimodal|image[_ -]?input|input[_ -]?image/.test(text) ||
-                tokens.indexOf("image") !== -1 ||
-                tokens.indexOf("images") !== -1;
-        }
-        if (key === "tools") {
-            return /tool|function[_ -]?call|functioncall/.test(text);
-        }
-        return false;
+    function capabilityProbeContext() {
+        return {
+            provider: config.getProvider(state.settings.provider),
+            settings: state.settings,
+            currentModelMetadata: currentModelMetadata(),
+            markdown: markdown,
+            requestUrlFor: function(settings, target) {
+                return config.requestUrlFor(settings, target);
+            },
+            requestHeaders: requestHeaders,
+            explainError: explainError,
+            toOpenAiChatMessage: toOpenAiChatMessage,
+            toOpenAiResponseInput: toOpenAiResponseInput,
+            toLmStudioInput: toLmStudioInput,
+            toOllamaMessage: toOllamaMessage,
+            toAnthropicMessage: toAnthropicMessage,
+            openAiMessageContent: openAiMessageContent,
+            extractOpenAiResponseText: extractOpenAiResponseText,
+            extractOpenAiResponseReasoning: extractOpenAiResponseReasoning,
+            extractLmStudioRestText: extractLmStudioRestText,
+            extractLmStudioRestReasoning: extractLmStudioRestReasoning,
+            extractAnthropicText: extractAnthropicText,
+            extractAnthropicReasoning: extractAnthropicReasoning,
+            lmStudioOpenAiChatCompletionsUrl: lmStudioOpenAiChatCompletionsUrl,
+            anthropicMaxTokens: anthropicMaxTokens
+        };
     }
 
     async function testModelCapabilities() {
@@ -1702,107 +1555,7 @@
     }
 
     async function runCapabilityProbe(key) {
-        try {
-            if (key === "reasoning") {
-                return await testReasoningCapability();
-            }
-            if (key === "vision") {
-                return await testVisionCapability();
-            }
-            if (key === "tools") {
-                return await testToolCapability();
-            }
-            return unknownCapability();
-        } catch (error) {
-            return capabilityFromError(error);
-        }
-    }
-
-    async function testReasoningCapability() {
-        var messages = [{
-            role: "user",
-            content: "Reply only OK."
-        }];
-        var response;
-        try {
-            response = await sendCapabilityTextProbe({
-                reasoning: true,
-                messages: messages
-            });
-        } catch (error) {
-            if (!isReasoningControlRejected(error)) {
-                throw error;
-            }
-            response = await sendCapabilityTextProbe({
-                messages: messages
-            });
-        }
-        if (String(response.reasoning || "").trim()) {
-            return capability("supported", "实测", "返回了 reasoning 内容");
-        }
-        if (/<\/?think/i.test(response.text || "")) {
-            return capability("supported", "实测", "返回了思考标签");
-        }
-        return capability("unsupported", "实测", "请求成功但未返回 reasoning 内容");
-    }
-
-    async function testVisionCapability() {
-        var response = await sendCapabilityTextProbe({
-            reasoningOff: true,
-            messages: [{
-                role: "user",
-                content: "The attached image is exactly one pixel. What color is the pixel? Reply with one lowercase English color word.",
-                images: [{
-                    name: "capability-test.png",
-                    type: "image/png",
-                    size: 69,
-                    dataUrl: TINY_PNG_DATA_URL
-                }]
-            }]
-        });
-        if (response.ok) {
-            return capability("supported", "实测", "图片问答成功");
-        }
-        return capability("unsupported", "实测", "图片输入请求失败");
-    }
-
-    async function testToolCapability() {
-        var provider = config.getProvider(state.settings.provider);
-        var response = await sendCapabilityToolProbe(provider);
-        var toolCalls = normalizeToolCalls(response.toolCalls);
-        return toolCalls.length ?
-            capability("supported", "实测", "模型返回了 tool_call") :
-            capability("unsupported", "实测", "请求成功但未返回 tool_call");
-    }
-
-    function capability(status, source, detail) {
-        return {
-            status: status,
-            source: source,
-            detail: detail || ""
-        };
-    }
-
-    function capabilityFromError(error) {
-        if (isCapabilityUnsupportedError(error)) {
-            return capability("unsupported", "实测", explainError(error));
-        }
-        return capability("error", "实测", explainError(error));
-    }
-
-    function isCapabilityUnsupportedError(error) {
-        var message = String(error && error.message || error || "").toLowerCase();
-        return message.indexOf("unsupported") !== -1 ||
-            message.indexOf("not support") !== -1 ||
-            message.indexOf("does not support") !== -1 ||
-            message.indexOf("invalid parameter") !== -1 ||
-            message.indexOf("unknown parameter") !== -1 ||
-            message.indexOf("unrecognized") !== -1 ||
-            message.indexOf("tool") !== -1 && message.indexOf("support") !== -1 ||
-            message.indexOf("image") !== -1 && message.indexOf("support") !== -1 ||
-            message.indexOf("vision") !== -1 && message.indexOf("support") !== -1 ||
-            message.indexOf("reasoning") !== -1 && message.indexOf("support") !== -1 ||
-            message.indexOf("不支持") !== -1;
+        return capabilityTester.runProbe(key, capabilityProbeContext());
     }
 
     function updateContextMeter() {
@@ -3002,358 +2755,6 @@
         collectResponseModelWarning(data, body.model, options);
         applyAssistantReasoning(assistantMessage, extractAnthropicReasoning(data), options);
         applyAssistantContent(assistantMessage, extractAnthropicText(data), options);
-    }
-
-    async function sendCapabilityTextProbe(options) {
-        var provider = config.getProvider(state.settings.provider);
-        if (provider.mode === "ollama") {
-            return sendOllamaCapabilityProbe(options);
-        }
-        if (provider.mode === "lmstudioRest") {
-            return sendLmStudioCapabilityProbe(options);
-        }
-        if (provider.mode === "anthropic") {
-            return sendAnthropicCapabilityProbe(options);
-        }
-        if (state.settings.openaiApi === "responses" && provider.supportsResponses !== false) {
-            return sendOpenAiResponsesCapabilityProbe(options);
-        }
-        return sendOpenAiChatCapabilityProbe(options);
-    }
-
-    async function sendCapabilityToolProbe(provider) {
-        if (provider.mode === "ollama") {
-            return sendOllamaCapabilityProbe({
-                reasoningOff: true,
-                tools: true,
-                messages: [toolProbeMessage()]
-            });
-        }
-        if (provider.mode === "lmstudioRest") {
-            return sendOpenAiChatCapabilityProbe({
-                reasoningOff: true,
-                tools: true,
-                toolChoice: "required",
-                url: lmStudioOpenAiChatCompletionsUrl(),
-                messages: [toolProbeMessage()]
-            });
-        }
-        if (provider.mode === "anthropic") {
-            return sendAnthropicCapabilityProbe({
-                tools: true,
-                messages: [toolProbeMessage()]
-            });
-        }
-        return sendOpenAiChatCapabilityProbe({
-            reasoningOff: true,
-            tools: true,
-            toolChoice: "required",
-            forceChatCompletions: true,
-            messages: [toolProbeMessage()]
-        });
-    }
-
-    function toolProbeMessage() {
-        return {
-            role: "user",
-            content: "Call the capability_probe tool with ok=true. Do not answer in text."
-        };
-    }
-
-    async function sendOpenAiChatCapabilityProbe(options) {
-        var settings = options.forceChatCompletions ? Object.assign({}, state.settings, { openaiApi: "chat" }) : state.settings;
-        var url = options.url || config.requestUrlFor(settings, "chat");
-        var body = {
-            model: state.settings.model,
-            messages: options.messages.map(toOpenAiChatMessage),
-            temperature: 0,
-            stream: false
-        };
-        if (options.reasoning) {
-            body.reasoning_effort = "minimal";
-        } else if (options.reasoningOff) {
-            body.reasoning_effort = "none";
-        }
-        if (options.tools) {
-            body.tools = [openAiToolDefinition()];
-            body.tool_choice = options.toolChoice || "required";
-        }
-        var data = await fetchCapabilityJsonWithProbeRetries(url, {
-            method: "POST",
-            headers: requestHeaders({ auth: "bearer", json: true }),
-            body: JSON.stringify(body)
-        }, body, options, ["reasoning_effort"]);
-        var message = (((data.choices || [])[0] || {}).message || {});
-        return {
-            ok: true,
-            text: openAiMessageContent(message),
-            reasoning: markdown.reasoningTextFromObject(message),
-            toolCalls: normalizeToolCalls(message.tool_calls || message.toolCalls || message.function_call || message.functionCall)
-        };
-    }
-
-    async function sendOpenAiResponsesCapabilityProbe(options) {
-        var body = {
-            model: state.settings.model,
-            input: options.messages.map(toOpenAiResponseInput),
-            temperature: 0,
-            stream: false
-        };
-        if (options.reasoning) {
-            body.reasoning = {
-                effort: "minimal"
-            };
-        } else if (options.reasoningOff) {
-            body.reasoning = {
-                effort: "none"
-            };
-        }
-        var data = await fetchCapabilityJsonWithProbeRetries(config.requestUrlFor(state.settings, "chat"), {
-            method: "POST",
-            headers: requestHeaders({ auth: "bearer", json: true }),
-            body: JSON.stringify(body)
-        }, body, options, ["reasoning"]);
-        return {
-            ok: true,
-            text: extractOpenAiResponseText(data),
-            reasoning: extractOpenAiResponseReasoning(data),
-            toolCalls: extractOpenAiResponseToolCalls(data)
-        };
-    }
-
-    async function sendLmStudioCapabilityProbe(options) {
-        var latest = options.messages[options.messages.length - 1];
-        var body = {
-            model: state.settings.model,
-            input: toLmStudioInput(latest),
-            stream: false,
-            temperature: 0
-        };
-        if (options.reasoning) {
-            body.reasoning = lmStudioReasoningProbeValue();
-        } else if (options.reasoningOff) {
-            body.reasoning = "off";
-        }
-        var data = await fetchCapabilityJsonWithProbeRetries(config.requestUrlFor(state.settings, "chat"), {
-            method: "POST",
-            headers: requestHeaders({ auth: "bearer", json: true }),
-            body: JSON.stringify(body)
-        }, body, options, ["reasoning"]);
-        return {
-            ok: true,
-            text: extractLmStudioRestText(data),
-            reasoning: extractLmStudioRestReasoning(data),
-            toolCalls: []
-        };
-    }
-
-    async function sendOllamaCapabilityProbe(options) {
-        var body = {
-            model: state.settings.model,
-            messages: options.messages.map(toOllamaMessage),
-            stream: false,
-            options: {
-                temperature: 0
-            }
-        };
-        if (options.reasoning) {
-            body.think = true;
-        } else if (options.reasoningOff) {
-            body.think = false;
-        }
-        if (options.tools) {
-            body.tools = [ollamaToolDefinition()];
-        }
-        var data = await fetchCapabilityJsonWithProbeRetries(config.requestUrlFor(state.settings, "chat"), {
-            method: "POST",
-            headers: requestHeaders({ json: true }),
-            body: JSON.stringify(body)
-        }, body, options, ["think"]);
-        var message = data.message || {};
-        return {
-            ok: true,
-            text: message.content || data.response || "",
-            reasoning: message.thinking || data.thinking || "",
-            toolCalls: normalizeToolCalls(message.tool_calls || message.toolCalls || data.tool_calls || data.toolCalls)
-        };
-    }
-
-    async function sendAnthropicCapabilityProbe(options) {
-        var body = {
-            model: state.settings.model,
-            messages: options.messages.filter(function(message) {
-                return message.role !== "system";
-            }).map(toAnthropicMessage),
-            max_tokens: anthropicMaxTokens(),
-            temperature: 0,
-            stream: false
-        };
-        if (options.tools) {
-            body.tools = [anthropicToolDefinition()];
-            body.tool_choice = {
-                type: "tool",
-                name: "capability_probe"
-            };
-        }
-        var data = await fetchCapabilityJson(config.requestUrlFor(state.settings, "chat"), {
-            method: "POST",
-            headers: requestHeaders({ auth: "x-api-key", json: true, anthropicVersion: true }),
-            body: JSON.stringify(body)
-        });
-        return {
-            ok: true,
-            text: extractAnthropicText(data),
-            reasoning: extractAnthropicReasoning(data),
-            toolCalls: extractAnthropicToolCalls(data)
-        };
-    }
-
-    function openAiToolDefinition() {
-        return {
-            type: "function",
-            function: {
-                name: "capability_probe",
-                description: "Reports model tool-use capability.",
-                parameters: toolProbeSchema()
-            }
-        };
-    }
-
-    function ollamaToolDefinition() {
-        return openAiToolDefinition();
-    }
-
-    function anthropicToolDefinition() {
-        return {
-            name: "capability_probe",
-            description: "Reports model tool-use capability.",
-            input_schema: toolProbeSchema()
-        };
-    }
-
-    function toolProbeSchema() {
-        return {
-            type: "object",
-            properties: {
-                ok: {
-                    type: "boolean"
-                }
-            },
-            required: ["ok"]
-        };
-    }
-
-    function lmStudioReasoningProbeValue() {
-        var metadata = currentModelMetadata();
-        var reasoning = metadata &&
-            metadata.capabilities &&
-            metadata.capabilities.reasoning;
-        var allowed = reasoning && Array.isArray(reasoning.allowed_options) ? reasoning.allowed_options : [];
-        if (allowed.indexOf("on") !== -1) {
-            return "on";
-        }
-        if (allowed.indexOf("low") !== -1) {
-            return "low";
-        }
-        if (allowed.length) {
-            return allowed[0];
-        }
-        return "on";
-    }
-
-    async function fetchCapabilityJson(url, options) {
-        var controller = new AbortController();
-        var timer = window.setTimeout(function() {
-            controller.abort();
-        }, 30000);
-        try {
-            var response = await fetch(url, Object.assign({}, options, {
-                signal: controller.signal
-            }));
-            await ensureOk(response);
-            return await response.json();
-        } finally {
-            window.clearTimeout(timer);
-        }
-    }
-
-    async function fetchCapabilityJsonWithProbeRetries(url, requestOptions, body, options, reasoningFields) {
-        var reasoningRetried = false;
-        var toolChoiceRetried = false;
-        while (true) {
-            try {
-                return await fetchCapabilityJson(url, Object.assign({}, requestOptions, {
-                    body: JSON.stringify(body)
-                }));
-            } catch (error) {
-                if (options.reasoningOff && !reasoningRetried && isReasoningControlRejected(error)) {
-                    reasoningRetried = true;
-                    (reasoningFields || []).forEach(function(field) {
-                        delete body[field];
-                    });
-                    continue;
-                }
-                if (options.tools && !toolChoiceRetried && isToolChoiceRejected(error)) {
-                    toolChoiceRetried = true;
-                    toggleToolChoiceShape(body);
-                    continue;
-                }
-                throw error;
-            }
-        }
-    }
-
-    function isReasoningControlRejected(error) {
-        var message = error && error.message ? error.message : String(error);
-        return /reasoning|reasoning_effort|effort|think/i.test(message) &&
-            /unsupported|unknown|unrecognized|invalid|not supported|extra|none/i.test(message);
-    }
-
-    function isToolChoiceRejected(error) {
-        var message = error && error.message ? error.message : String(error);
-        return /tool_choice|tool choice|toolchoice/i.test(message) &&
-            /unsupported|unknown|unrecognized|invalid|not supported|must be|supported values/i.test(message);
-    }
-
-    function toggleToolChoiceShape(body) {
-        if (body.tool_choice === "required") {
-            body.tool_choice = {
-                type: "function",
-                function: {
-                    name: "capability_probe"
-                }
-            };
-            return;
-        }
-        body.tool_choice = "required";
-    }
-
-    function normalizeToolCalls(value) {
-        if (!value) {
-            return [];
-        }
-        if (Array.isArray(value)) {
-            return value.filter(Boolean);
-        }
-        return [value];
-    }
-
-    function extractOpenAiResponseToolCalls(data) {
-        if (!data || !Array.isArray(data.output)) {
-            return [];
-        }
-        return data.output.filter(function(item) {
-            return item && (item.type === "function_call" || item.type === "tool_call");
-        });
-    }
-
-    function extractAnthropicToolCalls(data) {
-        if (!data || !Array.isArray(data.content)) {
-            return [];
-        }
-        return data.content.filter(function(item) {
-            return item && item.type === "tool_use";
-        });
     }
 
     function hasMessageContent(message) {
