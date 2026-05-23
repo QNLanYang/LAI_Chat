@@ -1047,7 +1047,8 @@
         var wrap = document.createElement("div");
         wrap.className = "message-images";
         images.forEach(function(image) {
-            if (!image.dataUrl) {
+            var src = messageImageSrc(image);
+            if (!src) {
                 var missing = document.createElement("span");
                 missing.className = "image-missing-label";
                 missing.textContent = image.id ? "图片加载中或已被清理" : "图片不可用";
@@ -1055,15 +1056,32 @@
                 return;
             }
             var img = document.createElement("img");
-            img.src = image.dataUrl;
+            img.src = src;
             img.alt = image.name || "图片";
             if (image.partial) {
                 img.className = "is-partial";
                 img.title = "生成预览";
             }
-            wrap.appendChild(img);
+            var link = document.createElement("a");
+            link.href = src;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.title = image.partial ? "打开生成预览" : "打开图片";
+            link.appendChild(img);
+            wrap.appendChild(link);
         });
         return wrap;
+    }
+
+    function messageImageSrc(image) {
+        if (!image) {
+            return "";
+        }
+        return image.objectUrl || image.dataUrl || image.url || "";
+    }
+
+    function sameMessageImageSource(left, right) {
+        return Boolean(messageImageSrc(left) && messageImageSrc(left) === messageImageSrc(right));
     }
 
     function renderMessageActions(chat, message) {
@@ -2278,7 +2296,7 @@
         }
         incoming.forEach(function(image) {
             var sameData = assistantMessage.images.some(function(existing) {
-                return existing.dataUrl === image.dataUrl;
+                return sameMessageImageSource(existing, image);
             });
             if (!sameData) {
                 assistantMessage.images.push(image);
@@ -3120,13 +3138,15 @@
                 return;
             }
             var b64 = item.result || item.b64_json || item.image_b64 || "";
-            if (!b64) {
+            var url = item.url || item.image_url || "";
+            if (!b64 && !url) {
                 return;
             }
             images.push({
                 name: "Responses 生成图片 " + (index + 1),
                 type: outputImageType(item),
-                dataUrl: base64ImageDataUrl(b64, outputImageType(item))
+                dataUrl: base64ImageDataUrl(b64, outputImageType(item)),
+                url: url
             });
         });
         return images;
@@ -3157,11 +3177,13 @@
                 name: image.name || "Responses 生成图片 " + (index + 1),
                 type: type,
                 dataUrl: image.dataUrl || base64ImageDataUrl(image.b64_json || image.result || "", type),
+                url: image.url || image.image_url || "",
+                objectUrl: image.objectUrl || "",
                 partial: Boolean(image.partial),
                 previewIndex: image.previewIndex
             };
         }).filter(function(image) {
-            return image && image.dataUrl;
+            return image && messageImageSrc(image);
         });
     }
 
