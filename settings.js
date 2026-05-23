@@ -6,6 +6,7 @@
     var secrets = window.LocalAiSecrets;
     var ui = window.LocalAiUi;
     var mediaStore = window.LocalAiMediaStore;
+    var storageRegistry = window.LocalAiStorage;
     var elements = {};
     var state = {
         kind: "chat",
@@ -155,30 +156,18 @@
     }
 
     async function collectStorageStats() {
-        var chats = parseJsonArray(localStorage.getItem(config.STORAGE_KEYS.chats));
-        var imageJobs = parseJsonArray(localStorage.getItem(config.STORAGE_KEYS.imageJobs));
-        var presets = presetsApi.loadPresets();
+        var localStats = storageRegistry.collectLocalStats();
         var mediaRecords = await listMediaRecords();
-        var estimate = navigator.storage && navigator.storage.estimate ?
-            await navigator.storage.estimate() :
-            null;
-        var messageCount = 0;
-        var chatImageCount = 0;
-        chats.forEach(function(chat) {
-            (chat.messages || []).forEach(function(message) {
-                messageCount += 1;
-                chatImageCount += Array.isArray(message.images) ? message.images.length : 0;
-            });
-        });
+        var estimate = await storageRegistry.browserStorageEstimate();
         return {
-            chats: chats.length,
-            messages: messageCount,
-            chatImages: chatImageCount,
-            presets: presets.length,
-            imageJobs: imageJobs.length,
+            chats: localStats.chats,
+            messages: localStats.messages,
+            chatImages: localStats.chatImages,
+            presets: localStats.presets,
+            imageJobs: localStats.imageJobs,
             mediaCount: mediaRecords.length,
             mediaBytes: sum(mediaRecords, "size"),
-            localStorageBytes: localStorageBytes(),
+            localStorageBytes: localStats.localStorageBytes,
             usageBytes: estimate && estimate.usage || 0,
             quotaBytes: estimate && estimate.quota || 0
         };
@@ -210,7 +199,7 @@
         if (!confirm("清理图片生成页历史和图片页 IndexedDB 缓存？聊天会话和 Provider 预设不会被删除。")) {
             return;
         }
-        localStorage.removeItem(config.STORAGE_KEYS.imageJobs);
+        storageRegistry.clearImageJobs();
         if (mediaStore && typeof mediaStore.clearImages === "function") {
             await mediaStore.clearImages({ scope: "image-job" });
         } else if (mediaStore && typeof mediaStore.pruneImages === "function") {
@@ -229,14 +218,14 @@
             app: "LAI Chat",
             version: 1,
             exportedAt: new Date().toISOString(),
-            localStorage: storageSnapshot(localStorage),
-            sessionStorage: storageSnapshot(sessionStorage),
+            localStorage: storageRegistry.storageSnapshot(localStorage),
+            sessionStorage: storageRegistry.storageSnapshot(sessionStorage),
             indexedDb: {
-                mediaDb: mediaStore && mediaStore.DB_NAME || "qnlanyang.localAi.media.v1",
+                mediaDb: storageRegistry.MEDIA_DB.name,
                 images: await exportMediaRecords()
             },
             cacheStorage: {
-                keys: await cacheKeys()
+                keys: await storageRegistry.cacheKeys()
             }
         };
         downloadJson(payload, "lai-chat-full-data-" + new Date().toISOString().slice(0, 10) + ".json");
@@ -247,7 +236,7 @@
         if (!confirm("重置迁移状态只会删除本应用命名空间下包含 migration/migrated 的标记，不会删除会话、预设或图片。")) {
             return;
         }
-        var removed = removeMigrationKeys(localStorage) + removeMigrationKeys(sessionStorage);
+        var removed = storageRegistry.removeMigrationKeys(localStorage) + storageRegistry.removeMigrationKeys(sessionStorage);
         setFeedback(removed ? "已重置 " + removed + " 个迁移状态标记。" : "当前没有可重置的迁移状态标记。", removed ? "ok" : "warn");
         refreshStorageStats().catch(function() {});
     }
@@ -594,46 +583,11 @@
             return;
         }
         setFeedback("正在清空本地数据...", "warn");
-        localStorage.clear();
-        sessionStorage.clear();
-        await deleteMediaDatabase();
-        await clearBrowserCaches();
+        await storageRegistry.resetAllLocalData({ mediaStore: mediaStore });
         setFeedback("本地数据已清空，页面即将刷新。", "ok");
         window.setTimeout(function() {
             window.location.reload();
         }, 800);
-    }
-
-    async function deleteMediaDatabase() {
-        if (window.LocalAiMediaStore && typeof window.LocalAiMediaStore.deleteDatabase === "function") {
-            await window.LocalAiMediaStore.deleteDatabase();
-            return;
-        }
-        if (!("indexedDB" in window)) {
-            return;
-        }
-        await new Promise(function(resolve, reject) {
-            var request = indexedDB.deleteDatabase("qnlanyang.localAi.media.v1");
-            request.onsuccess = function() {
-                resolve();
-            };
-            request.onerror = function() {
-                reject(request.error || new Error("IndexedDB 删除失败。"));
-            };
-            request.onblocked = function() {
-                reject(new Error("IndexedDB 正被其他页面占用，请关闭本应用的其他标签页后重试。"));
-            };
-        });
-    }
-
-    async function clearBrowserCaches() {
-        if (!("caches" in window)) {
-            return;
-        }
-        var keys = await caches.keys();
-        await Promise.all(keys.map(function(key) {
-            return caches.delete(key);
-        }));
     }
 
     function presetsFromPayload(payload) {
@@ -685,37 +639,6 @@
         return exported;
     }
 
-    function parseJsonArray(value) {
-        try {
-            var parsed = JSON.parse(value || "[]");
-            return Array.isArray(parsed) ? parsed : [];
-        } catch (error) {
-            return [];
-        }
-    }
-
-    function storageSnapshot(storage) {
-        var snapshot = {};
-        for (var index = 0; index < storage.length; index += 1) {
-            var key = storage.key(index);
-            snapshot[key] = storage.getItem(key);
-        }
-        return snapshot;
-    }
-
-    function localStorageBytes() {
-        var total = 0;
-        for (var index = 0; index < localStorage.length; index += 1) {
-            var key = localStorage.key(index);
-            total += byteLength(key) + byteLength(localStorage.getItem(key) || "");
-        }
-        return total;
-    }
-
-    function byteLength(value) {
-        return new Blob([String(value || "")]).size;
-    }
-
     function sum(items, key) {
         return (items || []).reduce(function(total, item) {
             return total + (Number(item && item[key]) || 0);
@@ -745,13 +668,6 @@
         });
     }
 
-    async function cacheKeys() {
-        if (!("caches" in window)) {
-            return [];
-        }
-        return caches.keys();
-    }
-
     function downloadJson(payload, filename) {
         var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
         var link = document.createElement("a");
@@ -761,20 +677,6 @@
         link.click();
         URL.revokeObjectURL(link.href);
         link.remove();
-    }
-
-    function removeMigrationKeys(storage) {
-        var keys = [];
-        for (var index = 0; index < storage.length; index += 1) {
-            var key = storage.key(index);
-            if (/^qnlanyang\.localAi\./.test(key) && /migrat/i.test(key)) {
-                keys.push(key);
-            }
-        }
-        keys.forEach(function(key) {
-            storage.removeItem(key);
-        });
-        return keys.length;
     }
 
     function setFeedback(text, tone) {

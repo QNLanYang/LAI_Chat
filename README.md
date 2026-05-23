@@ -21,7 +21,7 @@ LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户�
 >
 > 项目目前还在早期开发阶段，不承诺稳定 API 或向前兼容。
 >
-> 当前版本：0.1.1-alpha.1，变更记录见 [CHANGELOG](https://github.com/QNLanYang/LAI_Chat/blob/main/CHANGELOG.md)。
+> 当前版本：0.1.1-alpha.2，变更记录见 [CHANGELOG](https://github.com/QNLanYang/LAI_Chat/blob/main/CHANGELOG.md)。
 >
 > 欢迎通过 GitHub issues 反馈问题，也欢迎提交 PR。
 
@@ -37,7 +37,7 @@ LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户�
 - Providers 预设管理，可保存多个聊天和图片 API 配置，会根据地址自动匹配是否启用 https。
 - 支持 LM Studio REST v1、Ollama、OpenAI-compatible、Gemini OpenAI-compatible、Anthropic-compatible。
 - 支持 OpenAI Chat Completions 和 Responses 两种兼容接口。
-- 支持 Responses 内置 `image_generation` 工具，可在支持的接口中通过聊天触发图片生成。
+- 支持 Responses 内置 `image_generation` 工具，可在支持的接口中通过聊天触发图片生成，并解析 Responses 返回的图片。
 - 支持模型列表读取、连接测试、流式输出和停止生成，并在上游回传模型 id 与请求不一致时提示。
 - 支持聊天模型能力展示：优先读取模型列表返回的显式能力；未返回时显示未知；用户可手动触发轻量实测推理、视觉和工具调用能力。
 - 支持 Markdown 渲染、推理块展示和折叠。
@@ -60,6 +60,9 @@ LAI Chat是一个本地优先、纯静态、无账号、无后端的 AI 客户�
 - `images.html` / `images.js`：图片生成页面和图片 API 逻辑。
 - `settings.html` / `settings.js`：Provider 预设管理。
 - `providers.js`：Provider、默认地址、请求路径和 URL 规范化。
+- `storage-registry.js`：本地存储 key、IndexedDB 和清理/导出注册表。
+- `chat-adapters.js`：聊天请求构造、响应解析和流式读取。
+- `image-adapters.js`：图片请求构造、响应解析和流式图片处理。
 - `presets.js`：预设读写与迁移。
 - `markdown.js`：Markdown 和推理内容渲染。
 - `styles.css`：全站样式和主题变量。

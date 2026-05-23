@@ -6,7 +6,7 @@
     var secrets = window.LocalAiSecrets;
     var mediaStore = window.LocalAiMediaStore;
     var ui = window.LocalAiUi;
-    var imageResponse = window.LocalAiImageResponse;
+    var imageAdapters = window.LocalAiImageAdapters;
     var IMAGE_KEY = config.STORAGE_KEYS.imageJobs;
 
     var elements = {};
@@ -574,25 +574,20 @@
     }
 
     async function requestOpenAiImageGeneration(prompt, signal, job) {
-        var requestSize = requestImageSize();
         var provider = config.getImageProvider(state.activePreset.provider);
-        var body = {
+        var body = imageAdapters.buildOpenAiGenerationBody({
             model: state.activePreset.model,
             prompt: prompt,
-            n: imageCount()
-        };
-        if (requestSize) {
-            body.size = requestSize;
-        }
-        var requestQuality = requestImageQuality();
-        if (requestQuality) {
-            body.quality = requestQuality;
-        }
-        var requestBackground = requestImageBackground();
-        if (requestBackground) {
-            body.background = requestBackground;
-        }
-        applyOpenAiGenerationOptions(body, provider);
+            count: imageCount(),
+            size: requestImageSize(),
+            quality: requestImageQuality(),
+            background: requestImageBackground(),
+            outputFormat: requestOutputFormat(provider),
+            outputCompression: requestOutputCompression(provider),
+            moderation: requestModeration(provider),
+            stream: requestImageStream(provider),
+            partialImages: requestPartialImages(provider)
+        });
         var response = await fetch(config.imageRequestUrlFor(state.activePreset, "generation"), {
             method: "POST",
             headers: imageHeaders({ json: true, bearer: true }),
@@ -604,112 +599,44 @@
     }
 
     async function requestOpenAiImageEdit(prompt, signal, job) {
-        var requestSize = requestImageSize();
         var provider = config.getImageProvider(state.activePreset.provider);
-        var form = new FormData();
-        form.append("model", state.activePreset.model);
-        form.append("prompt", prompt);
-        form.append("n", String(imageCount()));
-        if (requestSize) {
-            form.append("size", requestSize);
-        }
-        var requestQuality = requestImageQuality();
-        if (requestQuality) {
-            form.append("quality", requestQuality);
-        }
-        var requestBackground = requestImageBackground();
-        if (requestBackground) {
-            form.append("background", requestBackground);
-        }
-        var requestOptions = applyOpenAiEditOptions(form, provider);
-        state.references.forEach(function(image, index) {
-            form.append("image[]", dataUrlToBlob(image.dataUrl, image.type), image.name || "reference-" + index + ".png");
+        var request = imageAdapters.buildOpenAiEditForm({
+            model: state.activePreset.model,
+            prompt: prompt,
+            count: imageCount(),
+            size: requestImageSize(),
+            quality: requestImageQuality(),
+            background: requestImageBackground(),
+            outputFormat: requestOutputFormat(provider),
+            outputCompression: requestOutputCompression(provider),
+            moderation: requestModeration(provider),
+            stream: requestImageStream(provider),
+            partialImages: requestPartialImages(provider),
+            references: state.references
         });
         var response = await fetch(config.imageRequestUrlFor(state.activePreset, "edit"), {
             method: "POST",
             headers: imageHeaders({ bearer: true }),
-            body: form,
+            body: request.form,
             signal: signal
         });
         await ensureOk(response);
-        return handleOpenAiImageResponse(response, requestOptions, job);
-    }
-
-    function applyOpenAiGenerationOptions(body, provider) {
-        var outputFormat = requestOutputFormat(provider);
-        if (outputFormat) {
-            body.output_format = outputFormat;
-        }
-        var outputCompression = requestOutputCompression(provider);
-        if (outputCompression !== null) {
-            body.output_compression = outputCompression;
-        }
-        var moderation = requestModeration(provider);
-        if (moderation) {
-            body.moderation = moderation;
-        }
-        if (requestImageStream(provider)) {
-            body.stream = true;
-            body.partial_images = requestPartialImages(provider);
-        }
-        return body;
-    }
-
-    function applyOpenAiEditOptions(form, provider) {
-        var options = {
-            model: state.activePreset.model,
-            size: requestImageSize() || "",
-            quality: requestImageQuality() || "",
-            background: requestImageBackground() || ""
-        };
-        var outputFormat = requestOutputFormat(provider);
-        if (outputFormat) {
-            form.append("output_format", outputFormat);
-            options.output_format = outputFormat;
-        }
-        var outputCompression = requestOutputCompression(provider);
-        if (outputCompression !== null) {
-            form.append("output_compression", String(outputCompression));
-            options.output_compression = outputCompression;
-        }
-        var moderation = requestModeration(provider);
-        if (moderation) {
-            form.append("moderation", moderation);
-            options.moderation = moderation;
-        }
-        if (requestImageStream(provider)) {
-            form.append("stream", "true");
-            form.append("partial_images", String(requestPartialImages(provider)));
-            options.stream = true;
-            options.partial_images = requestPartialImages(provider);
-        }
-        return options;
+        return handleOpenAiImageResponse(response, request.requestOptions, job);
     }
 
     async function requestGeminiImages(prompt, signal) {
-        var parts = [{ text: prompt }];
-        state.references.forEach(function(image) {
-            parts.push({
-                inline_data: {
-                    mime_type: image.type || "image/png",
-                    data: image.dataUrl.split(",")[1] || ""
-                }
-            });
-        });
         var apiKey = secrets.apiKeyForHeader(state.activePreset.apiKey, "API Key");
         var response = await fetch(config.imageRequestUrlFor(state.activePreset, "generation") + "?key=" + encodeURIComponent(apiKey), {
             method: "POST",
             headers: imageHeaders({ json: true }),
-            body: JSON.stringify({
-                contents: [{
-                    role: "user",
-                    parts: parts
-                }]
-            }),
+            body: JSON.stringify(imageAdapters.buildGeminiBody({
+                prompt: prompt,
+                references: state.references
+            })),
             signal: signal
         });
         await ensureOk(response);
-        return imageResponse.extractGeminiImages(await response.json());
+        return imageAdapters.extractGeminiImages(await response.json());
     }
 
     function imageHeaders(options) {
@@ -760,7 +687,7 @@
     }
 
     async function handleOpenAiImageResponse(response, requestOptions, job) {
-        return imageResponse.handleOpenAiImageResponse(response, requestOptions, imageResponseHooks(job));
+        return imageAdapters.handleOpenAiImageResponse(response, requestOptions, imageResponseHooks(job));
     }
 
     function imageResponseHooks(job) {

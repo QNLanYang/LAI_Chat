@@ -8,6 +8,7 @@
     var ui = window.LocalAiUi;
     var mediaStore = window.LocalAiMediaStore;
     var capabilityTester = window.LocalAiCapabilityTester;
+    var chatAdapters = window.LocalAiChatAdapters;
     var CHAT_KEY = config.STORAGE_KEYS.chats;
     var SETTINGS_KEY = config.STORAGE_KEYS.settings;
     var providerDefaults = config.PROVIDERS;
@@ -1512,18 +1513,18 @@
             },
             requestHeaders: requestHeaders,
             explainError: explainError,
-            toOpenAiChatMessage: toOpenAiChatMessage,
-            toOpenAiResponseInput: toOpenAiResponseInput,
-            toLmStudioInput: toLmStudioInput,
-            toOllamaMessage: toOllamaMessage,
-            toAnthropicMessage: toAnthropicMessage,
-            openAiMessageContent: openAiMessageContent,
-            extractOpenAiResponseText: extractOpenAiResponseText,
-            extractOpenAiResponseReasoning: extractOpenAiResponseReasoning,
-            extractLmStudioRestText: extractLmStudioRestText,
-            extractLmStudioRestReasoning: extractLmStudioRestReasoning,
-            extractAnthropicText: extractAnthropicText,
-            extractAnthropicReasoning: extractAnthropicReasoning,
+            toOpenAiChatMessage: chatAdapters.toOpenAiChatMessage,
+            toOpenAiResponseInput: chatAdapters.toOpenAiResponseInput,
+            toLmStudioInput: chatAdapters.toLmStudioInput,
+            toOllamaMessage: chatAdapters.toOllamaMessage,
+            toAnthropicMessage: chatAdapters.toAnthropicMessage,
+            openAiMessageContent: chatAdapters.openAiMessageContent,
+            extractOpenAiResponseText: chatAdapters.extractOpenAiResponseText,
+            extractOpenAiResponseReasoning: chatAdapters.extractOpenAiResponseReasoning,
+            extractLmStudioRestText: chatAdapters.extractLmStudioRestText,
+            extractLmStudioRestReasoning: chatAdapters.extractLmStudioRestReasoning,
+            extractAnthropicText: chatAdapters.extractAnthropicText,
+            extractAnthropicReasoning: chatAdapters.extractAnthropicReasoning,
             lmStudioOpenAiChatCompletionsUrl: lmStudioOpenAiChatCompletionsUrl,
             anthropicMaxTokens: anthropicMaxTokens
         };
@@ -2281,7 +2282,7 @@
     }
 
     function applyAssistantImages(assistantMessage, images, options) {
-        var incoming = normalizeGeneratedImages(images);
+        var incoming = chatAdapters.normalizeGeneratedImages(images);
         if (!incoming.length) {
             return;
         }
@@ -2313,7 +2314,7 @@
         var image = {
             name: "Responses 图片预览 " + (index + 1),
             type: "image/png",
-            dataUrl: base64ImageDataUrl(b64, "image/png"),
+            dataUrl: chatAdapters.base64ImageDataUrl(b64, "image/png"),
             partial: true
         };
         if (!Array.isArray(assistantMessage.images)) {
@@ -2345,7 +2346,7 @@
     function latestOpenAiResponseInput(messages) {
         for (var index = messages.length - 1; index >= 0; index -= 1) {
             if (hasMessageContent(messages[index])) {
-                return [toOpenAiResponseInput(messages[index])];
+                return [chatAdapters.toOpenAiResponseInput(messages[index])];
             }
         }
         return [];
@@ -2390,15 +2391,17 @@
     }
 
     async function requestOpenAiCompatible(messages, assistantMessage, options) {
-        var body = {
+        var body = chatAdapters.buildOpenAiChatBody({
             model: state.settings.model,
-            messages: messages.map(toOpenAiChatMessage),
+            messages: messages,
             temperature: state.settings.temperature,
-            stream: state.settings.stream
-        };
-        addMaxTokens(body, "max_tokens");
-        addSamplerParams(body, "openaiChat");
-        addChatReasoning(body);
+            stream: state.settings.stream,
+            maxTokens: state.settings.maxTokens,
+            topP: state.settings.topP,
+            presencePenalty: state.settings.presencePenalty,
+            frequencyPenalty: state.settings.frequencyPenalty,
+            reasoning: state.settings.reasoning
+        });
         var response = await fetch(config.requestUrlFor(state.settings, "chat"), {
             method: "POST",
             headers: requestHeaders({ auth: "bearer", json: true }),
@@ -2407,8 +2410,8 @@
         });
         await ensureOk(response);
 
-        if (state.settings.stream && response.body && isEventStream(response)) {
-            await readSse(response, function(json) {
+        if (state.settings.stream && response.body && chatAdapters.isEventStream(response)) {
+            await chatAdapters.readSse(response, function(json) {
                 collectResponseModelWarning(json, body.model, options);
                 var choice = json.choices && json.choices[0];
                 var delta = (choice && choice.delta) || {};
@@ -2429,7 +2432,7 @@
         collectResponseModelWarning(data, body.model, options);
         var message = (((data.choices || [])[0] || {}).message || {});
         applyAssistantReasoning(assistantMessage, markdown.reasoningTextFromObject(message), options);
-        applyAssistantContent(assistantMessage, openAiMessageContent(message), options);
+        applyAssistantContent(assistantMessage, chatAdapters.openAiMessageContent(message), options);
     }
 
     async function requestOpenAiResponses(messages, assistantMessage, options) {
@@ -2496,28 +2499,19 @@
         });
         var input = usePreviousResponse ?
             latestOpenAiResponseInput(responseMessages) :
-            responseMessages.map(toOpenAiResponseInput);
-        var body = {
+            responseMessages.map(chatAdapters.toOpenAiResponseInput);
+        var body = chatAdapters.buildOpenAiResponsesBody({
             model: state.settings.model,
             input: input,
             temperature: state.settings.temperature,
-            stream: state.settings.stream
-        };
-        addMaxTokens(body, "max_output_tokens");
-        addSamplerParams(body, "openaiResponses");
-        if (useImageGeneration) {
-            body.tools = [{
-                type: "image_generation"
-            }];
-        }
-        if (usePreviousResponse) {
-            body.previous_response_id = responseState.responseId;
-        }
-        var systemPrompt = requestSystemPrompt(options);
-        if (systemPrompt) {
-            body.instructions = systemPrompt;
-        }
-        addResponsesReasoning(body);
+            stream: state.settings.stream,
+            maxOutputTokens: state.settings.maxTokens,
+            topP: state.settings.topP,
+            reasoning: state.settings.reasoning,
+            tools: useImageGeneration ? [{ type: "image_generation" }] : [],
+            previousResponseId: usePreviousResponse ? responseState.responseId : "",
+            instructions: requestSystemPrompt(options)
+        });
         var response = await fetch(responseUrl, {
             method: "POST",
             headers: requestHeaders({ auth: "bearer", json: true }),
@@ -2526,9 +2520,9 @@
         });
         await ensureOk(response);
 
-        if (state.settings.stream && response.body && isEventStream(response)) {
+        if (state.settings.stream && response.body && chatAdapters.isEventStream(response)) {
             var completedResponse = null;
-            await readSse(response, function(json) {
+            await chatAdapters.readSse(response, function(json) {
                 collectResponseModelWarning(json.response || json, body.model, options);
                 if (json.response && json.response.id) {
                     completedResponse = json.response;
@@ -2556,12 +2550,12 @@
                 if (json.type === "response.completed" && json.response) {
                     completedResponse = json.response;
                     if (!String(assistantMessage.reasoning || "").trim()) {
-                        applyAssistantReasoning(assistantMessage, extractOpenAiResponseReasoning(json.response), options);
+                        applyAssistantReasoning(assistantMessage, chatAdapters.extractOpenAiResponseReasoning(json.response), options);
                     }
                     if (!hasGeneratedAssistantContent(assistantMessage, options.continuationPrefix || "")) {
-                        applyAssistantContent(assistantMessage, extractOpenAiResponseText(json.response), options);
+                        applyAssistantContent(assistantMessage, chatAdapters.extractOpenAiResponseText(json.response), options);
                     }
-                    applyAssistantImages(assistantMessage, extractOpenAiResponseImages(json.response), { replacePreviews: true });
+                    applyAssistantImages(assistantMessage, chatAdapters.extractOpenAiResponseImages(json.response), { replacePreviews: true });
                 }
                 if (json.type === "error" && json.error) {
                     throw new Error(json.error.message || "OpenAI Responses stream error");
@@ -2573,9 +2567,9 @@
 
         var data = await response.json();
         collectResponseModelWarning(data, body.model, options);
-        applyAssistantReasoning(assistantMessage, extractOpenAiResponseReasoning(data), options);
-        applyAssistantContent(assistantMessage, extractOpenAiResponseText(data), options);
-        applyAssistantImages(assistantMessage, extractOpenAiResponseImages(data), { replacePreviews: true });
+        applyAssistantReasoning(assistantMessage, chatAdapters.extractOpenAiResponseReasoning(data), options);
+        applyAssistantContent(assistantMessage, chatAdapters.extractOpenAiResponseText(data), options);
+        applyAssistantImages(assistantMessage, chatAdapters.extractOpenAiResponseImages(data), { replacePreviews: true });
         recordOpenAiResponsesSuccess(options, responseSignature, responseTransport, data);
     }
 
@@ -2583,23 +2577,20 @@
         var latestUserMessage = chat.messages.slice().reverse().find(function(message) {
             return message.role === "user" && hasMessageContent(message);
         });
-        var body = {
+        var body = chatAdapters.buildLmStudioBody({
             model: state.settings.model,
-            input: latestUserMessage ? toLmStudioInput(latestUserMessage) : "",
-            stream: state.settings.stream
-        };
-        addMaxTokens(body, "max_output_tokens");
-        addSamplerParams(body, "lmstudioRest");
-
-        addLmStudioReasoning(body);
-        var systemPrompt = requestSystemPrompt(options);
-        if (systemPrompt) {
-            body.system_prompt = systemPrompt;
-        }
-        var previousResponseId = lmStudioRestPreviousResponseId(chat);
-        if (previousResponseId) {
-            body.previous_response_id = previousResponseId;
-        }
+            input: latestUserMessage ? chatAdapters.toLmStudioInput(latestUserMessage) : "",
+            stream: state.settings.stream,
+            maxOutputTokens: state.settings.maxTokens,
+            temperature: state.settings.temperature,
+            topP: state.settings.topP,
+            topK: state.settings.topK,
+            minP: state.settings.minP,
+            repeatPenalty: state.settings.repeatPenalty,
+            reasoning: state.settings.reasoning,
+            systemPrompt: requestSystemPrompt(options),
+            previousResponseId: lmStudioRestPreviousResponseId(chat)
+        });
 
         var response = await fetch(config.requestUrlFor(state.settings, "chat"), {
             method: "POST",
@@ -2609,8 +2600,8 @@
         });
         await ensureOk(response);
 
-        if (state.settings.stream && response.body && isEventStream(response)) {
-            await readSse(response, function(json) {
+        if (state.settings.stream && response.body && chatAdapters.isEventStream(response)) {
+            await chatAdapters.readSse(response, function(json) {
                 collectResponseModelWarning(json.result || json, body.model, options);
                 if (json.type === "reasoning.delta" && typeof json.content === "string") {
                     assistantMessage.reasoning = (assistantMessage.reasoning || "") + json.content;
@@ -2625,10 +2616,10 @@
                 if (json.type === "chat.end" && json.result) {
                     recordLmStudioRestSuccess(chat, json.result, options);
                     if (!String(assistantMessage.reasoning || "").trim()) {
-                        assistantMessage.reasoning = extractLmStudioRestReasoning(json.result);
+                        assistantMessage.reasoning = chatAdapters.extractLmStudioRestReasoning(json.result);
                     }
                     if (!assistantMessage.content.trim()) {
-                        applyAssistantContent(assistantMessage, extractLmStudioRestText(json.result), options);
+                        applyAssistantContent(assistantMessage, chatAdapters.extractLmStudioRestText(json.result), options);
                     }
                 }
                 if (json.type === "error" && json.error) {
@@ -2641,8 +2632,8 @@
         var data = await response.json();
         collectResponseModelWarning(data, body.model, options);
         recordLmStudioRestSuccess(chat, data, options);
-        assistantMessage.reasoning = extractLmStudioRestReasoning(data);
-        applyAssistantContent(assistantMessage, extractLmStudioRestText(data), options);
+        assistantMessage.reasoning = chatAdapters.extractLmStudioRestReasoning(data);
+        applyAssistantContent(assistantMessage, chatAdapters.extractLmStudioRestText(data), options);
     }
 
     async function requestLmStudioRestAsResponses(messages, assistantMessage, options) {
@@ -2677,13 +2668,18 @@
     }
 
     async function requestOllama(messages, assistantMessage, options) {
-        var body = {
+        var body = chatAdapters.buildOllamaBody({
             model: state.settings.model,
-            messages: messages.map(toOllamaMessage),
+            messages: messages,
             stream: state.settings.stream,
-            options: {}
-        };
-        addOllamaOptions(body.options);
+            temperature: state.settings.temperature,
+            maxTokens: state.settings.maxTokens,
+            topP: state.settings.topP,
+            topK: state.settings.topK,
+            minP: state.settings.minP,
+            repeatPenalty: state.settings.repeatPenalty,
+            frequencyPenalty: state.settings.frequencyPenalty
+        });
         var response = await fetch(config.requestUrlFor(state.settings, "chat"), {
             method: "POST",
             headers: requestHeaders({ json: true }),
@@ -2692,8 +2688,8 @@
         });
         await ensureOk(response);
 
-        if (state.settings.stream && response.body && !isJsonResponse(response)) {
-            await readJsonLines(response, function(json) {
+        if (state.settings.stream && response.body && !chatAdapters.isJsonResponse(response)) {
+            await chatAdapters.readJsonLines(response, function(json) {
                 collectResponseModelWarning(json, body.model, options);
                 var delta = json.message && json.message.content;
                 if (delta) {
@@ -2710,20 +2706,16 @@
     }
 
     async function requestAnthropic(messages, assistantMessage, options) {
-        var body = {
+        var body = chatAdapters.buildAnthropicBody({
             model: state.settings.model,
-            messages: messages.filter(function(message) {
-                return message.role !== "system";
-            }).map(toAnthropicMessage),
-            max_tokens: anthropicMaxTokens(),
+            messages: messages,
+            maxTokens: state.settings.maxTokens > 0 ? state.settings.maxTokens : defaultSettings.maxTokens,
             temperature: state.settings.temperature,
-            stream: state.settings.stream
-        };
-        addSamplerParams(body, "anthropic");
-        var systemPrompt = requestSystemPrompt(options);
-        if (systemPrompt) {
-            body.system = systemPrompt;
-        }
+            stream: state.settings.stream,
+            topP: state.settings.topP,
+            topK: state.settings.topK,
+            system: requestSystemPrompt(options)
+        });
 
         var response = await fetch(config.requestUrlFor(state.settings, "chat"), {
             method: "POST",
@@ -2733,8 +2725,8 @@
         });
         await ensureOk(response);
 
-        if (state.settings.stream && response.body && isEventStream(response)) {
-            await readSse(response, function(json) {
+        if (state.settings.stream && response.body && chatAdapters.isEventStream(response)) {
+            await chatAdapters.readSse(response, function(json) {
                 collectResponseModelWarning(json.message || json, body.model, options);
                 if (json.type === "content_block_delta" && json.delta) {
                     if (typeof json.delta.text === "string") {
@@ -2771,8 +2763,8 @@
 
         var data = await response.json();
         collectResponseModelWarning(data, body.model, options);
-        applyAssistantReasoning(assistantMessage, extractAnthropicReasoning(data), options);
-        applyAssistantContent(assistantMessage, extractAnthropicText(data), options);
+        applyAssistantReasoning(assistantMessage, chatAdapters.extractAnthropicReasoning(data), options);
+        applyAssistantContent(assistantMessage, chatAdapters.extractAnthropicText(data), options);
     }
 
     function hasMessageContent(message) {
@@ -2785,238 +2777,8 @@
         );
     }
 
-    function toOpenAiChatMessage(message) {
-        if (!message.images || !message.images.length || message.role === "system") {
-            return {
-                role: message.role,
-                content: message.content
-            };
-        }
-        var content = [];
-        if (message.content) {
-            content.push({
-                type: "text",
-                text: message.content
-            });
-        }
-        message.images.filter(hasImageDataUrl).forEach(function(image) {
-            content.push({
-                type: "image_url",
-                image_url: {
-                    url: image.dataUrl
-                }
-            });
-        });
-        if (!content.length) {
-            return {
-                role: message.role,
-                content: message.content || ""
-            };
-        }
-        return {
-            role: message.role,
-            content: content
-        };
-    }
-
-    function toOpenAiResponseInput(message) {
-        if (!message.images || !message.images.length || message.role !== "user") {
-            return {
-                role: message.role,
-                content: message.content
-            };
-        }
-        var content = [];
-        if (message.content) {
-            content.push({
-                type: "input_text",
-                text: message.content
-            });
-        }
-        (message.images || []).filter(hasImageDataUrl).forEach(function(image) {
-            content.push({
-                type: "input_image",
-                image_url: image.dataUrl
-            });
-        });
-        return {
-            role: message.role,
-            content: content.length ? content : message.content
-        };
-    }
-
-    function toLmStudioInput(message) {
-        if (!message.images || !message.images.length) {
-            return message.content;
-        }
-        var input = [];
-        input.push({
-            type: "text",
-            content: message.content || " "
-        });
-        message.images.filter(hasImageDataUrl).forEach(function(image) {
-            input.push({
-                type: "image",
-                data_url: image.dataUrl
-            });
-        });
-        return input;
-    }
-
-    function toOllamaMessage(message) {
-        var payload = {
-            role: message.role,
-            content: message.content
-        };
-        if (message.images && message.images.length && message.role !== "system") {
-            payload.images = message.images.filter(hasImageDataUrl).map(function(image) {
-                return image.dataUrl.split(",")[1] || "";
-            }).filter(Boolean);
-        }
-        return payload;
-    }
-
-    function toAnthropicMessage(message) {
-        if (!message.images || !message.images.length) {
-            return {
-                role: message.role,
-                content: message.content
-            };
-        }
-        var content = [];
-        if (message.content) {
-            content.push({
-                type: "text",
-                text: message.content
-            });
-        }
-        message.images.filter(hasImageDataUrl).forEach(function(image) {
-            content.push({
-                type: "image",
-                source: {
-                    type: "base64",
-                    media_type: image.type || "image/png",
-                    data: image.dataUrl.split(",")[1] || ""
-                }
-            });
-        });
-        if (!content.length) {
-            return {
-                role: message.role,
-                content: message.content || ""
-            };
-        }
-        return {
-            role: message.role,
-            content: content
-        };
-    }
-
-    function addMaxTokens(body, key) {
-        if (state.settings.maxTokens > 0) {
-            body[key] = state.settings.maxTokens;
-        }
-    }
-
     function anthropicMaxTokens() {
         return state.settings.maxTokens > 0 ? state.settings.maxTokens : defaultSettings.maxTokens;
-    }
-
-    function addSamplerParams(body, target) {
-        if (target === "openaiChat") {
-            addOptionalParam(body, "top_p", state.settings.topP);
-            addOptionalParam(body, "presence_penalty", state.settings.presencePenalty);
-            addOptionalParam(body, "frequency_penalty", state.settings.frequencyPenalty);
-            return;
-        }
-        if (target === "openaiResponses") {
-            addOptionalParam(body, "top_p", state.settings.topP);
-            return;
-        }
-        if (target === "anthropic") {
-            addOptionalParam(body, "top_p", state.settings.topP);
-            addOptionalParam(body, "top_k", state.settings.topK);
-            return;
-        }
-        if (target === "lmstudioRest") {
-            addOptionalParam(body, "temperature", state.settings.temperature);
-            addOptionalParam(body, "top_p", state.settings.topP);
-            addOptionalParam(body, "top_k", state.settings.topK);
-            addOptionalParam(body, "min_p", state.settings.minP);
-            addOptionalParam(body, "repeat_penalty", state.settings.repeatPenalty);
-        }
-    }
-
-    function addOllamaOptions(options) {
-        addOptionalParam(options, "temperature", state.settings.temperature);
-        if (state.settings.maxTokens > 0) {
-            options.num_predict = state.settings.maxTokens;
-        }
-        addOptionalParam(options, "top_p", state.settings.topP);
-        addOptionalParam(options, "top_k", state.settings.topK);
-        addOptionalParam(options, "min_p", state.settings.minP);
-        addOptionalParam(options, "repeat_penalty", state.settings.repeatPenalty);
-        addOptionalParam(options, "frequency_penalty", state.settings.frequencyPenalty);
-    }
-
-    function addOptionalParam(body, key, value) {
-        if (value !== null && value !== undefined && value !== "") {
-            body[key] = value;
-        }
-    }
-
-    function addLmStudioReasoning(body) {
-        var reasoning = state.settings.reasoning;
-        if (!reasoning || reasoning === "auto") {
-            return;
-        }
-        if (reasoning === "off") {
-            body.reasoning = "off";
-        } else if (reasoning === "on") {
-            body.reasoning = "on";
-        } else if (reasoning === "minimal") {
-            body.reasoning = "low";
-        } else if (reasoning === "xhigh") {
-            body.reasoning = "high";
-        } else {
-            body.reasoning = reasoning;
-        }
-    }
-
-    function addResponsesReasoning(body) {
-        var reasoning = state.settings.reasoning;
-        if (!reasoning || reasoning === "auto") {
-            return;
-        }
-        if (reasoning === "off") {
-            reasoning = "none";
-        }
-        if (reasoning === "on") {
-            reasoning = "medium";
-        }
-        body.reasoning = {
-            effort: reasoning
-        };
-    }
-
-    function addChatReasoning(body) {
-        var reasoning = state.settings.reasoning;
-        if (!reasoning || reasoning === "auto") {
-            return;
-        }
-        if (reasoning === "off") {
-            body.reasoning_effort = "none";
-            return;
-        }
-        if (reasoning === "on") {
-            body.reasoning_effort = "medium";
-            return;
-        }
-        if (reasoning === "minimal") {
-            body.reasoning_effort = "minimal";
-            return;
-        }
-        body.reasoning_effort = reasoning;
     }
 
     function requestHeaders(options) {
@@ -3032,255 +2794,6 @@
 
     async function ensureOk(response) {
         return ui.ensureOk(response);
-    }
-
-    function isEventStream(response) {
-        return (response.headers.get("content-type") || "").toLowerCase().indexOf("text/event-stream") !== -1;
-    }
-
-    function isJsonResponse(response) {
-        return (response.headers.get("content-type") || "").toLowerCase().indexOf("application/json") !== -1;
-    }
-
-    function extractLmStudioRestText(data) {
-        if (!data || !Array.isArray(data.output)) {
-            return "";
-        }
-        return data.output.map(function(item) {
-            if (!item || item.type !== "message") {
-                return "";
-            }
-            return item.content || "";
-        }).join("").trim();
-    }
-
-    function extractLmStudioRestReasoning(data) {
-        if (!data || !Array.isArray(data.output)) {
-            return "";
-        }
-        return data.output.map(function(item) {
-            if (!item || item.type !== "reasoning") {
-                return "";
-            }
-            return item.content || "";
-        }).join("").trim();
-    }
-
-    function extractAnthropicText(data) {
-        if (!data) {
-            return "";
-        }
-        if (typeof data.content === "string") {
-            return data.content;
-        }
-        if (!Array.isArray(data.content)) {
-            return "";
-        }
-        return data.content.map(function(item) {
-            return item && item.type === "text" ? item.text || "" : "";
-        }).join("").trim();
-    }
-
-    function extractAnthropicReasoning(data) {
-        if (!data || !Array.isArray(data.content)) {
-            return "";
-        }
-        return data.content.map(function(item) {
-            return markdown.reasoningTextFromObject(item);
-        }).join("").trim();
-    }
-
-    function extractOpenAiResponseText(data) {
-        if (!data) {
-            return "";
-        }
-        if (typeof data.output_text === "string") {
-            return data.output_text;
-        }
-        if (!Array.isArray(data.output)) {
-            return "";
-        }
-        return data.output.map(function(item) {
-            if (!item || !Array.isArray(item.content)) {
-                return "";
-            }
-            return item.content.map(function(content) {
-                if (!content) {
-                    return "";
-                }
-                if (typeof content.text === "string") {
-                    return content.text;
-                }
-                if (typeof content.content === "string") {
-                    return content.content;
-                }
-                return "";
-            }).join("");
-        }).join("").trim();
-    }
-
-    function extractOpenAiResponseReasoning(data) {
-        if (!data || !Array.isArray(data.output)) {
-            return "";
-        }
-        return data.output.map(function(item) {
-            return markdown.reasoningTextFromObject(item);
-        }).join("").trim();
-    }
-
-    function extractOpenAiResponseImages(data) {
-        if (!data || !Array.isArray(data.output)) {
-            return [];
-        }
-        var images = [];
-        data.output.forEach(function(item, index) {
-            if (!item || item.type !== "image_generation_call") {
-                return;
-            }
-            var b64 = item.result || item.b64_json || item.image_b64 || "";
-            var url = item.url || item.image_url || "";
-            if (!b64 && !url) {
-                return;
-            }
-            images.push({
-                name: "Responses 生成图片 " + (index + 1),
-                type: outputImageType(item),
-                dataUrl: base64ImageDataUrl(b64, outputImageType(item)),
-                url: url
-            });
-        });
-        return images;
-    }
-
-    function outputImageType(item) {
-        var format = String(item.output_format || item.format || "png").toLowerCase();
-        if (format === "jpg") {
-            format = "jpeg";
-        }
-        return "image/" + (["png", "jpeg", "webp"].indexOf(format) !== -1 ? format : "png");
-    }
-
-    function normalizeGeneratedImages(images) {
-        return (images || []).map(function(image, index) {
-            if (!image) {
-                return null;
-            }
-            if (typeof image === "string") {
-                return {
-                    name: "Responses 生成图片 " + (index + 1),
-                    type: "image/png",
-                    dataUrl: base64ImageDataUrl(image, "image/png")
-                };
-            }
-            var type = image.type || "image/png";
-            return {
-                name: image.name || "Responses 生成图片 " + (index + 1),
-                type: type,
-                dataUrl: image.dataUrl || base64ImageDataUrl(image.b64_json || image.result || "", type),
-                url: image.url || image.image_url || "",
-                objectUrl: image.objectUrl || "",
-                partial: Boolean(image.partial),
-                previewIndex: image.previewIndex
-            };
-        }).filter(function(image) {
-            return image && messageImageSrc(image);
-        });
-    }
-
-    function base64ImageDataUrl(value, type) {
-        var text = String(value || "");
-        if (!text) {
-            return "";
-        }
-        if (text.indexOf("data:") === 0) {
-            return text;
-        }
-        return "data:" + (type || "image/png") + ";base64," + text;
-    }
-
-    function openAiMessageContent(message) {
-        if (!message) {
-            return "";
-        }
-        if (typeof message.content === "string") {
-            return message.content;
-        }
-        if (!Array.isArray(message.content)) {
-            return "";
-        }
-        return message.content.map(function(part) {
-            if (!part) {
-                return "";
-            }
-            if (typeof part === "string") {
-                return part;
-            }
-            if (typeof part.text === "string") {
-                return part.text;
-            }
-            if (typeof part.content === "string") {
-                return part.content;
-            }
-            return "";
-        }).join("").trim();
-    }
-
-    async function readSse(response, onData) {
-        var reader = response.body.getReader();
-        var decoder = new TextDecoder();
-        var buffer = "";
-
-        while (true) {
-            var result = await reader.read();
-            if (result.done) {
-                break;
-            }
-            buffer += decoder.decode(result.value, { stream: true });
-            var lines = buffer.split(/\r?\n/);
-            buffer = lines.pop();
-            for (var i = 0; i < lines.length; i += 1) {
-                var line = lines[i].trim();
-                if (!line || line.indexOf("data:") !== 0) {
-                    continue;
-                }
-                var data = line.slice(5).trim();
-                if (data === "[DONE]") {
-                    return;
-                }
-                try {
-                    onData(JSON.parse(data));
-                } catch (error) {
-                    throw new Error("流式响应解析失败: " + data.slice(0, 120));
-                }
-            }
-        }
-    }
-
-    async function readJsonLines(response, onData) {
-        var reader = response.body.getReader();
-        var decoder = new TextDecoder();
-        var buffer = "";
-
-        while (true) {
-            var result = await reader.read();
-            if (result.done) {
-                break;
-            }
-            buffer += decoder.decode(result.value, { stream: true });
-            var lines = buffer.split(/\r?\n/);
-            buffer = lines.pop();
-            for (var i = 0; i < lines.length; i += 1) {
-                var line = lines[i].trim();
-                if (!line) {
-                    continue;
-                }
-                try {
-                    onData(JSON.parse(line));
-                } catch (error) {
-                    throw new Error("流式响应解析失败: " + line.slice(0, 120));
-                }
-            }
-        }
     }
 
     var renderQueued = false;

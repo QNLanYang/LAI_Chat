@@ -9,6 +9,105 @@
         output_format: "output_format"
     };
 
+    function buildOpenAiGenerationBody(options) {
+        var body = {
+            model: options.model,
+            prompt: options.prompt,
+            n: options.count
+        };
+        addOpenAiBaseOptions(body, options);
+        addOpenAiOutputOptions(body, options);
+        return body;
+    }
+
+    function buildOpenAiEditForm(options) {
+        var form = new FormData();
+        var requestOptions = {
+            model: options.model,
+            size: options.size || "",
+            quality: options.quality || "",
+            background: options.background || ""
+        };
+        form.append("model", options.model);
+        form.append("prompt", options.prompt);
+        form.append("n", String(options.count));
+        appendIfValue(form, "size", options.size);
+        appendIfValue(form, "quality", options.quality);
+        appendIfValue(form, "background", options.background);
+        addOpenAiOutputOptions(form, options, requestOptions);
+        (options.references || []).forEach(function(image, index) {
+            form.append("image[]", dataUrlToBlob(image.dataUrl, image.type), image.name || "reference-" + index + ".png");
+        });
+        return {
+            form: form,
+            requestOptions: requestOptions
+        };
+    }
+
+    function buildGeminiBody(options) {
+        var parts = [{ text: options.prompt }];
+        (options.references || []).forEach(function(image) {
+            parts.push({
+                inline_data: {
+                    mime_type: image.type || "image/png",
+                    data: String(image.dataUrl || "").split(",")[1] || ""
+                }
+            });
+        });
+        return {
+            contents: [{
+                role: "user",
+                parts: parts
+            }]
+        };
+    }
+
+    function addOpenAiBaseOptions(target, options) {
+        appendIfValue(target, "size", options.size);
+        appendIfValue(target, "quality", options.quality);
+        appendIfValue(target, "background", options.background);
+    }
+
+    function addOpenAiOutputOptions(target, options, requestOptions) {
+        appendIfValue(target, "output_format", options.outputFormat);
+        if (hasValue(options.outputFormat) && requestOptions) {
+            requestOptions.output_format = options.outputFormat;
+        }
+        if (options.outputCompression !== null && options.outputCompression !== undefined) {
+            appendValue(target, "output_compression", options.outputCompression);
+            if (requestOptions) {
+                requestOptions.output_compression = options.outputCompression;
+            }
+        }
+        appendIfValue(target, "moderation", options.moderation);
+        if (hasValue(options.moderation) && requestOptions) {
+            requestOptions.moderation = options.moderation;
+        }
+        if (options.stream) {
+            appendValue(target, "stream", true);
+            appendValue(target, "partial_images", options.partialImages);
+            if (requestOptions) {
+                requestOptions.stream = true;
+                requestOptions.partial_images = options.partialImages;
+            }
+        }
+    }
+
+    function appendIfValue(target, key, value) {
+        if (!hasValue(value)) {
+            return;
+        }
+        appendValue(target, key, value);
+    }
+
+    function appendValue(target, key, value) {
+        if (target instanceof FormData) {
+            target.append(key, String(value));
+            return;
+        }
+        target[key] = value;
+    }
+
     async function handleOpenAiImageResponse(response, requestOptions, hooks) {
         var contentType = response.headers.get("content-type") || "";
         if (contentType.indexOf("text/event-stream") !== -1) {
@@ -227,6 +326,21 @@
         return ["png", "jpeg", "webp"].indexOf(value) !== -1 ? "image/" + value : "";
     }
 
+    function dataUrlToBlob(dataUrl, type) {
+        var parts = String(dataUrl || "").split(",");
+        var binary = atob(parts[1] || "");
+        var bytes = new Uint8Array(binary.length);
+        for (var index = 0; index < binary.length; index += 1) {
+            bytes[index] = binary.charCodeAt(index);
+        }
+        return new Blob([bytes], { type: type || mimeTypeFromDataUrl(dataUrl) || "image/png" });
+    }
+
+    function mimeTypeFromDataUrl(dataUrl) {
+        var match = /^data:([^;,]+)/.exec(String(dataUrl || ""));
+        return match ? match[1] : "";
+    }
+
     function extractGeminiImages(data) {
         var images = [];
         (data.candidates || []).forEach(function(candidate) {
@@ -259,7 +373,10 @@
         }
     }
 
-    window.LocalAiImageResponse = {
+    window.LocalAiImageAdapters = {
+        buildOpenAiGenerationBody: buildOpenAiGenerationBody,
+        buildOpenAiEditForm: buildOpenAiEditForm,
+        buildGeminiBody: buildGeminiBody,
         handleOpenAiImageResponse: handleOpenAiImageResponse,
         extractOpenAiImages: extractOpenAiImages,
         extractGeminiImages: extractGeminiImages,

@@ -1,17 +1,7 @@
 (function(window) {
     "use strict";
 
-    var STORAGE_KEYS = {
-        chats: "qnlanyang.localAi.chats.v1",
-        settings: "qnlanyang.localAi.settings.v1",
-        apiKey: "qnlanyang.localAi.apiKey.local",
-        presets: "qnlanyang.localAi.providerPresets.v1",
-        activeChatPreset: "qnlanyang.localAi.activeChatPreset.v1",
-        activeImagePreset: "qnlanyang.localAi.activeImagePreset.v1",
-        imageJobs: "qnlanyang.localAi.imageJobs.v1",
-        modelCapabilities: "qnlanyang.localAi.modelCapabilities.v1",
-        theme: "qnlanyang.localAi.theme.v1"
-    };
+    var STORAGE_KEYS = window.LocalAiStorage && window.LocalAiStorage.KEYS || {};
 
     var EMPTY_CHAT_PROVIDER = {
         label: "未配置",

@@ -1,9 +1,11 @@
 (function(window) {
     "use strict";
 
-    var DB_NAME = "qnlanyang.localAi.media.v1";
-    var DB_VERSION = 1;
-    var IMAGE_STORE = "images";
+    var registry = window.LocalAiStorage;
+    var mediaDb = registry && registry.MEDIA_DB || {};
+    var DB_NAME = mediaDb.name || "qnlanyang.localAi.media.v1";
+    var DB_VERSION = mediaDb.version || 1;
+    var IMAGE_STORE = mediaDb.imageStore || "images";
     var dbPromise = null;
 
     function openDb() {
