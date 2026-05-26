@@ -9,7 +9,7 @@
     var storageRegistry = window.LocalAiStorage;
     var elements = {};
     var state = {
-        kind: "chat",
+        kind: "provider",
         presets: [],
         active: null,
         isSaving: false,
@@ -20,7 +20,7 @@
 
     function init() {
         elements = {
-            chatKindButton: document.getElementById("chatKindButton"),
+            providerKindButton: document.getElementById("providerKindButton"),
             imageKindButton: document.getElementById("imageKindButton"),
             presetList: document.getElementById("presetList"),
             addPresetButton: document.getElementById("addPresetButton"),
@@ -28,6 +28,7 @@
             importPresetButton: document.getElementById("importPresetButton"),
             exportPresetButton: document.getElementById("exportPresetButton"),
             presetImportInput: document.getElementById("presetImportInput"),
+            presetEditorTitle: document.getElementById("presetEditorTitle"),
             presetNameInput: document.getElementById("presetNameInput"),
             presetNameError: document.getElementById("presetNameError"),
             presetProviderSelect: document.getElementById("presetProviderSelect"),
@@ -53,15 +54,15 @@
         };
 
         bindEvents();
-        loadKind("chat");
+        loadKind("provider");
         refreshStorageStats().catch(function(error) {
             setFeedback("存储统计读取失败：" + error.message, "warn");
         });
     }
 
     function bindEvents() {
-        elements.chatKindButton.addEventListener("click", function() {
-            loadKind("chat");
+        elements.providerKindButton.addEventListener("click", function() {
+            loadKind("provider");
         });
         elements.imageKindButton.addEventListener("click", function() {
             loadKind("image");
@@ -71,17 +72,17 @@
             presetsApi.upsertPreset(preset);
             presetsApi.setActivePreset(state.kind, preset.id);
             loadKind(state.kind);
-            setFeedback("已新增预设。请填写后保存。", "ok");
+            setFeedback("已新增接入点。请填写后保存。", "ok");
             elements.presetNameInput.focus();
             elements.presetNameInput.select();
         });
         elements.deletePresetButton.addEventListener("click", function() {
-            if (!state.active || !confirm("删除预设“" + state.active.name + "”？")) {
+            if (!state.active || !confirm("删除接入点“" + state.active.name + "”？")) {
                 return;
             }
             presetsApi.deletePreset(state.active.id);
             loadKind(state.kind);
-            setFeedback("已删除预设。", "ok");
+            setFeedback("已删除接入点。", "ok");
         });
         elements.importPresetButton.addEventListener("click", function() {
             elements.presetImportInput.click();
@@ -94,8 +95,11 @@
         });
         elements.presetProviderSelect.addEventListener("change", function() {
             var provider = currentProviderInfo();
+            if (state.kind !== "provider" && state.kind !== "image") {
+                return;
+            }
             elements.presetEndpointInput.value = provider.defaultAddress || "";
-            elements.presetModelInput.value = provider.defaultModel || "";
+            elements.presetModelInput.value = state.kind === "image" ? provider.defaultModel || "" : "";
             updateVisibility();
             updatePreviewFromForm();
             scheduleAutoSave();
@@ -177,7 +181,7 @@
         elements.storageStats.textContent = "";
         [
             ["聊天", stats.chats + " 个会话 · " + stats.messages + " 条消息 · " + stats.chatImages + " 张聊天图片"],
-            ["预设", stats.presets + " 个 Provider 预设"],
+            ["配置", stats.presets + " 个 Provider/预设配置"],
             ["图片页", stats.imageJobs + " 条生成记录"],
             ["IndexedDB", stats.mediaCount + " 张媒体 · " + formatBytes(stats.mediaBytes)],
             ["localStorage", formatBytes(stats.localStorageBytes)],
@@ -196,7 +200,7 @@
     }
 
     async function clearImageCache() {
-        if (!confirm("清理图片生成页历史和图片页 IndexedDB 缓存？聊天会话和 Provider 预设不会被删除。")) {
+        if (!confirm("清理图片生成页历史和图片页 IndexedDB 缓存？聊天会话、Provider 接入点和预设不会被删除。")) {
             return;
         }
         storageRegistry.clearImageJobs();
@@ -210,7 +214,7 @@
     }
 
     async function exportAllData() {
-        if (!confirm("全量导出会包含 Provider 预设、API Key、会话、图片历史和 IndexedDB 媒体文件。请只保存在可信位置。")) {
+        if (!confirm("全量导出会包含 Provider 接入点、预设、API Key、会话、图片历史和 IndexedDB 媒体文件。请只保存在可信位置。")) {
             return;
         }
         setFeedback("正在导出全量数据...", "ok");
@@ -233,7 +237,7 @@
     }
 
     function resetMigrationState() {
-        if (!confirm("重置迁移状态只会删除本应用命名空间下包含 migration/migrated 的标记，不会删除会话、预设或图片。")) {
+        if (!confirm("重置迁移状态只会删除本应用命名空间下包含 migration/migrated 的标记，不会删除会话、Provider 接入点、预设或图片。")) {
             return;
         }
         var removed = storageRegistry.removeMigrationKeys(localStorage) + storageRegistry.removeMigrationKeys(sessionStorage);
@@ -252,7 +256,7 @@
     }
 
     function renderKindButtons() {
-        elements.chatKindButton.classList.toggle("is-active", state.kind === "chat");
+        elements.providerKindButton.classList.toggle("is-active", state.kind === "provider");
         elements.imageKindButton.classList.toggle("is-active", state.kind === "image");
     }
 
@@ -262,7 +266,7 @@
 
         var blank = document.createElement("option");
         blank.value = "";
-        blank.textContent = "请选择 Provider";
+        blank.textContent = "请选择接入类型";
         elements.presetProviderSelect.appendChild(blank);
 
         Object.keys(providers).forEach(function(key) {
@@ -278,7 +282,7 @@
         if (!state.presets.length) {
             var empty = document.createElement("div");
             empty.className = "empty-state";
-            empty.textContent = "暂无预设。可以直接新建，也可以导入 JSON。";
+            empty.textContent = "暂无接入点。可以直接新建，也可以导入 JSON。";
             elements.presetList.appendChild(empty);
             return;
         }
@@ -299,6 +303,7 @@
 
     function renderEditor() {
         var hasActive = Boolean(state.active);
+        elements.presetEditorTitle.textContent = editorTitle();
         [
             elements.presetNameInput,
             elements.presetProviderSelect,
@@ -312,6 +317,7 @@
         ].forEach(function(input) {
             input.disabled = !hasActive || state.isSaving;
         });
+        elements.savePresetButton.textContent = saveButtonLabel();
 
         if (!hasActive) {
             elements.presetNameInput.value = "";
@@ -322,7 +328,7 @@
             elements.presetOpenAiApiSelect.value = "chat";
             elements.presetResponseImageGenerationCheckbox.checked = false;
             elements.presetApiKeyInput.value = "";
-            elements.presetPreview.textContent = "暂无当前预设。";
+            elements.presetPreview.textContent = "暂无当前接入点。";
             updateVisibility();
             return;
         }
@@ -371,7 +377,7 @@
         if (explicit) {
             state.isSaving = false;
             elements.savePresetButton.classList.remove("is-loading");
-            elements.savePresetButton.textContent = "保存预设";
+            elements.savePresetButton.textContent = saveButtonLabel();
             renderPresetList();
             renderEditor();
             setFeedback("保存成功。", "ok");
@@ -400,24 +406,30 @@
     function buildPresetFromForm() {
         var provider = elements.presetProviderSelect.value;
         var providerInfo = currentProviderInfo();
-        var openaiApi = providerInfo.mode === "openai" && providerInfo.supportsResponses === false ?
-            "chat" :
-            elements.presetOpenAiApiSelect.value;
-        return Object.assign({}, state.active, {
+        var next = Object.assign({}, state.active, {
             name: elements.presetNameInput.value.trim(),
             provider: provider,
             endpoint: elements.presetEndpointInput.value.trim(),
-            model: elements.presetModelInput.value.trim(),
-            openaiApi: openaiApi,
-            responseImageGeneration: Boolean(
-                state.kind === "chat" &&
+            apiKey: secrets.normalizeApiKey(elements.presetApiKeyInput.value)
+        });
+        if (state.kind === "provider") {
+            var openaiApi = providerInfo.mode === "openai" && providerInfo.supportsResponses === false ?
+                "chat" :
+                elements.presetOpenAiApiSelect.value;
+            next.openaiApi = openaiApi;
+            next.responseImageGeneration = Boolean(
                 providerInfo.mode === "openai" &&
                 providerInfo.supportsResponses !== false &&
                 openaiApi === "responses" &&
                 elements.presetResponseImageGenerationCheckbox.checked
-            ),
-            apiKey: secrets.normalizeApiKey(elements.presetApiKeyInput.value)
-        });
+            );
+        }
+        if (state.kind === "image") {
+            next.model = elements.presetModelInput.value.trim();
+        } else {
+            delete next.model;
+        }
+        return next;
     }
 
     function normalizeEndpoint() {
@@ -445,7 +457,7 @@
         var preset = buildPresetFromForm();
         var text = "";
         if (!preset.provider) {
-            text = "请选择 Provider 后保存。";
+            text = "请选择接入类型后保存。";
         } else if (state.kind === "image") {
             text = "图片 POST: " + (config.imageRequestUrlFor(preset, "generation") || "待填写地址");
         } else {
@@ -473,7 +485,7 @@
             return {
                 valid: false,
                 field: "name",
-                message: "预设名称不能为空。"
+                message: "接入点名称不能为空。"
             };
         }
         return {
@@ -490,21 +502,74 @@
     function updateVisibility() {
         var provider = elements.presetProviderSelect.value;
         var providerInfo = currentProviderInfo();
-        var hasProvider = Boolean(state.active && providerInfo.mode !== "none");
-        var isOpenAiChat = state.kind === "chat" &&
+        var hasActive = Boolean(state.active);
+        var hasProvider = Boolean(hasActive && providerInfo.mode !== "none");
+        var isProviderPreset = state.kind === "provider";
+        var isImagePreset = state.kind === "image";
+        var isOpenAiProvider = isProviderPreset &&
             providerInfo.mode === "openai" &&
             providerInfo.supportsResponses !== false;
+        var isResponsesProvider = isOpenAiProvider &&
+            elements.presetOpenAiApiSelect.value === "responses";
 
+        setVisible(elements.presetProviderSelect.closest("label"), hasActive && (isProviderPreset || isImagePreset));
         setVisible(elements.presetEndpointField, hasProvider);
-        setVisible(elements.presetModelField, hasProvider);
+        setVisible(elements.presetModelField, hasProvider && isImagePreset);
         setVisible(elements.presetApiKeyField, hasProvider);
-        setVisible(elements.presetOpenAiApiField, hasProvider && isOpenAiChat);
-        setVisible(elements.presetResponseImageGenerationField, hasProvider && isOpenAiChat && elements.presetOpenAiApiSelect.value === "responses");
+        setVisible(elements.presetOpenAiApiField, hasProvider && isOpenAiProvider);
+        setVisible(elements.presetResponseImageGenerationField, hasProvider && isResponsesProvider);
     }
 
     function currentProviderInfo() {
         var provider = elements.presetProviderSelect.value;
         return state.kind === "image" ? config.getImageProvider(provider) : config.getProvider(provider);
+    }
+
+    function editorTitle() {
+        if (state.kind === "provider") {
+            return "当前聊天 Provider";
+        }
+        return "当前图片 Provider";
+    }
+
+    function saveButtonLabel() {
+        return "保存接入点";
+    }
+
+    function optionalNumberValue(value) {
+        return value === null || value === undefined ? "" : value;
+    }
+
+    function parseTokenLimit(value) {
+        var number = parseInt(value, 10);
+        if (!Number.isFinite(number) || number < 0) {
+            return 0;
+        }
+        return number;
+    }
+
+    function parseOptionalNumber(value, min, max) {
+        if (value === "") {
+            return null;
+        }
+        var number = parseFloat(value);
+        return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : null;
+    }
+
+    function parseOptionalInteger(value, min) {
+        if (value === "") {
+            return null;
+        }
+        var number = parseInt(value, 10);
+        return Number.isFinite(number) ? Math.max(min, number) : null;
+    }
+
+    function clampNumber(value, min, max, fallback) {
+        var number = parseFloat(value);
+        if (!Number.isFinite(number)) {
+            return fallback;
+        }
+        return Math.min(max, Math.max(min, number));
     }
 
     function setVisible(element, visible) {
@@ -517,12 +582,12 @@
     }
 
     function exportPresets() {
-        var presets = presetsApi.loadPresets();
+        var presets = presetsApi.loadPresets().filter(isPresetLike);
         if (!presets.length) {
-            setFeedback("当前没有可导出的预设。", "warn");
+            setFeedback("当前没有可导出的接入点。", "warn");
             return;
         }
-        if (!confirm("导出的 Provider 预设会包含已保存的 API Key。请确认只在可信环境保存和分享这个 JSON 文件。")) {
+        if (!confirm("导出的接入点会包含已保存的 API Key。请确认只在可信环境保存和分享这个 JSON 文件。")) {
             return;
         }
         var payload = {
@@ -534,26 +599,26 @@
         var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
         var link = document.createElement("a");
         link.href = URL.createObjectURL(blob);
-        link.download = "lai-chat-provider-presets.json";
+        link.download = "lai-chat-providers.json";
         document.body.appendChild(link);
         link.click();
         URL.revokeObjectURL(link.href);
         link.remove();
-        setFeedback("已导出预设 JSON。", "ok");
+        setFeedback("已导出接入点 JSON。", "ok");
     }
 
     async function importPresets(file) {
         if (!file) {
             return;
         }
-        if (!confirm("导入的 Provider 预设可能包含 API Key，并会保存到本机 localStorage。请确认 JSON 文件来源可信。")) {
+        if (!confirm("导入的接入点可能包含 API Key，并会保存到本机 localStorage。请确认 JSON 文件来源可信。")) {
             return;
         }
         try {
             var payload = JSON.parse(await file.text());
             var imported = presetsFromPayload(payload);
             if (!imported.length) {
-                setFeedback("未找到可导入的预设。", "warn");
+                setFeedback("未找到可导入的接入点。", "warn");
                 return;
             }
             var ready = imported.map(ensureImportId);
@@ -567,14 +632,14 @@
                 presetsApi.setActivePreset(state.kind, preferred.id);
             }
             loadKind(state.kind);
-            setFeedback("已导入 " + imported.length + " 个预设。", "ok");
+            setFeedback("已导入 " + imported.length + " 个接入点。", "ok");
         } catch (error) {
             setFeedback("导入失败：" + error.message, "error");
         }
     }
 
     async function resetLocalData() {
-        if (!confirm("将清空本应用保存在当前浏览器里的所有本地数据。操作前请先导出 Provider 预设，确认继续？")) {
+        if (!confirm("将清空本应用保存在当前浏览器里的所有本地数据。操作前请先导出 Provider 接入点，确认继续？")) {
             return;
         }
         var keyword = prompt("二次确认：输入“清空本地数据”以继续。");
@@ -601,7 +666,7 @@
     }
 
     function isPresetLike(value) {
-        return value && (value.kind === "chat" || value.kind === "image");
+        return value && (value.kind === "provider" || value.kind === "image");
     }
 
     function ensureImportId(preset) {

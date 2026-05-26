@@ -262,6 +262,42 @@ button {
     gap: 12px;
 }
 
+.parameters-section > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 38px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 700;
+    list-style: none;
+    padding: 8px 10px;
+}
+
+.parameters-section > summary::-webkit-details-marker {
+    display: none;
+}
+
+.parameters-section > summary::after {
+    content: "展开";
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.parameters-section[open] > summary::after {
+    content: "收起";
+}
+
+.parameters-section > summary:hover {
+    border-color: rgba(15, 118, 110, 0.34);
+    color: var(--accent-strong);
+}
+
 .section-head,
 .row-actions,
 .sidebar-footer,

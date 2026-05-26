@@ -6,6 +6,7 @@
         settings: "qnlanyang.localAi.settings.v1",
         apiKey: "qnlanyang.localAi.apiKey.local",
         presets: "qnlanyang.localAi.providerPresets.v1",
+        activeProviderPreset: "qnlanyang.localAi.activeProviderPreset.v1",
         activeChatPreset: "qnlanyang.localAi.activeChatPreset.v1",
         activeImagePreset: "qnlanyang.localAi.activeImagePreset.v1",
         imageJobs: "qnlanyang.localAi.imageJobs.v1",

@@ -40,41 +40,41 @@
         <main class="settings-page">
             <section class="preset-panel">
                 <div class="section-head">
-                    <h2>Provider 预设</h2>
-                    <div class="segmented-control" role="tablist" aria-label="预设类型">
-                        <button class="is-active" type="button" id="chatKindButton">聊天</button>
-                        <button type="button" id="imageKindButton">图片</button>
+                    <h2>Provider 接入点</h2>
+                    <div class="segmented-control" role="tablist" aria-label="配置类型">
+                        <button class="is-active" type="button" id="providerKindButton">聊天 Provider</button>
+                        <button type="button" id="imageKindButton">图片 Provider</button>
                     </div>
                 </div>
                 <div class="preset-list" id="presetList"></div>
                 <div class="row-actions">
-                    <button class="ghost-button" type="button" id="addPresetButton">新增预设</button>
-                    <button class="ghost-button danger" type="button" id="deletePresetButton">删除预设</button>
+                    <button class="ghost-button" type="button" id="addPresetButton">新增接入点</button>
+                    <button class="ghost-button danger" type="button" id="deletePresetButton">删除接入点</button>
                 </div>
                 <div class="row-actions">
-                    <button class="ghost-button" type="button" id="importPresetButton">导入预设</button>
-                    <button class="ghost-button" type="button" id="exportPresetButton">导出预设</button>
+                    <button class="ghost-button" type="button" id="importPresetButton">导入接入点</button>
+                    <button class="ghost-button" type="button" id="exportPresetButton">导出接入点</button>
                     <input id="presetImportInput" type="file" accept="application/json,.json" hidden>
                 </div>
             </section>
 
             <section class="preset-panel settings">
-                <h2>当前预设</h2>
+                <h2 id="presetEditorTitle">当前接入点</h2>
                 <label>
                     <span>名称</span>
                     <input id="presetNameInput" spellcheck="false" autocomplete="off">
                     <small class="field-error" id="presetNameError"></small>
                 </label>
                 <label>
-                    <span>Provider</span>
+                    <span>协议</span>
                     <select id="presetProviderSelect"></select>
                 </label>
                 <label id="presetEndpointField">
-                    <span>地址</span>
+                    <span>Base URL</span>
                     <input id="presetEndpointInput" type="text" inputmode="url" spellcheck="false" autocomplete="off">
                 </label>
-                <label id="presetModelField">
-                    <span>模型</span>
+                <label id="presetModelField" hidden>
+                    <span>默认模型</span>
                     <input id="presetModelInput" spellcheck="false" autocomplete="off">
                 </label>
                 <label id="presetOpenAiApiField">
@@ -86,7 +86,7 @@
                 </label>
                 <label class="check-row" id="presetResponseImageGenerationField" hidden>
                     <input id="presetResponseImageGenerationCheckbox" type="checkbox">
-                    <span>允许 Responses 调用图片生成</span>
+                    <span>允许使用 Responses 调用 GPT-image</span>
                 </label>
                 <label id="presetApiKeyField">
                     <span>API Key（本地 localStorage）</span>
@@ -94,7 +94,7 @@
                 </label>
                 <div class="request-preview" id="presetPreview" aria-live="polite"></div>
                 <div class="row-actions settings-save-actions">
-                    <button class="send-button" type="button" id="savePresetButton">保存预设</button>
+                    <button class="send-button" type="button" id="savePresetButton">保存接入点</button>
                 </div>
                 <div class="connection-feedback" id="settingsFeedback" aria-live="polite"></div>
             </section>
@@ -117,7 +117,7 @@
             <details class="preset-panel settings danger-zone">
                 <summary>Danger Zone</summary>
                 <div class="danger-zone-body">
-                    <p class="danger-zone-text">清空本地数据会删除会话、Provider 预设、API Key、图片历史、IndexedDB 媒体文件和本地缓存。测试版升级后数据异常时再使用；操作前建议先导出 Provider 预设。</p>
+                    <p class="danger-zone-text">清空本地数据会删除会话、Provider 接入点、预设、API Key、图片历史、IndexedDB 媒体文件和本地缓存。测试版升级后数据异常时再使用；操作前建议先导出 Provider 接入点。</p>
                     <button class="ghost-button danger" type="button" id="resetLocalDataButton">清空全部本地数据</button>
                 </div>
             </details>

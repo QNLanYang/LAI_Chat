@@ -13,6 +13,7 @@
     var SETTINGS_KEY = config.STORAGE_KEYS.settings;
     var providerDefaults = config.PROVIDERS;
     var defaultSettings = config.DEFAULT_SETTINGS;
+    var ANTHROPIC_COMPAT_AUTO_MAX_TOKENS = 2147483647;
     var CAPABILITY_DEFS = capabilityTester.DEFS;
 
     var elements = {};
@@ -31,6 +32,8 @@
         isSending: false,
         isLoadingModels: false,
         isTestingCapabilities: false,
+        providerPresets: [],
+        activeProviderPreset: null,
         chatPresets: [],
         activeChatPreset: null,
         editingMessageId: "",
@@ -53,6 +56,7 @@
             chatList: document.getElementById("chatList"),
             chatSearchInput: document.getElementById("chatSearchInput"),
             newChatButton: document.getElementById("newChatButton"),
+            providerPresetSelect: document.getElementById("providerPresetSelect"),
             chatPresetSelect: document.getElementById("chatPresetSelect"),
             providerSelect: document.getElementById("providerSelect"),
             openaiApiField: document.getElementById("openaiApiField"),
@@ -87,6 +91,7 @@
             frequencyPenaltyInput: document.getElementById("frequencyPenaltyInput"),
             reasoningSelect: document.getElementById("reasoningSelect"),
             streamCheckbox: document.getElementById("streamCheckbox"),
+            saveChatPresetButton: document.getElementById("saveChatPresetButton"),
             responseImageGenerationField: document.getElementById("responseImageGenerationField"),
             responseImageGenerationCheckbox: document.getElementById("responseImageGenerationCheckbox"),
             contextMeter: document.getElementById("contextMeter"),
@@ -108,6 +113,9 @@
             sendButton: document.getElementById("sendButton")
         };
 
+        state.providerPresets = presetsApi.presetsByKind("provider");
+        state.activeProviderPreset = presetsApi.getActivePreset("provider");
+        state.settings = presetsApi.applyProviderPreset(state.settings, state.activeProviderPreset);
         state.chatPresets = presetsApi.presetsByKind("chat");
         state.activeChatPreset = presetsApi.getActivePreset("chat");
         state.settings = presetsApi.applyChatPreset(state.settings, state.activeChatPreset);
@@ -116,6 +124,7 @@
             createChat(false);
         }
         state.activeChatId = state.chats[0].id;
+        syncActiveChatResponseImageGeneration();
 
         elements.providerSelect.value = state.settings.provider;
         elements.endpointInput.value = state.settings.endpoint;
@@ -133,7 +142,8 @@
         elements.frequencyPenaltyInput.value = optionalNumberValue(state.settings.frequencyPenalty);
         elements.reasoningSelect.value = state.settings.reasoning;
         elements.streamCheckbox.checked = state.settings.stream;
-        elements.responseImageGenerationCheckbox.checked = Boolean(state.settings.responseImageGeneration);
+        elements.responseImageGenerationCheckbox.checked = Boolean(currentChatResponseImageGeneration());
+        renderProviderPresetSelect();
         renderChatPresetSelect();
         elements.apiKeyInput.value = loadApiKey();
         state.endpointWasAutoFilled = config.isDefaultAddress(state.settings.provider, state.settings.endpoint);
@@ -195,14 +205,15 @@
             renderChatList();
         });
 
-        elements.chatPresetSelect.addEventListener("change", function() {
-            var presetId = elements.chatPresetSelect.value;
-            presetsApi.setActivePreset("chat", presetId);
-            state.activeChatPreset = state.chatPresets.find(function(preset) {
+        elements.providerPresetSelect.addEventListener("change", function() {
+            var presetId = elements.providerPresetSelect.value;
+            presetsApi.setActivePreset("provider", presetId);
+            state.activeProviderPreset = state.providerPresets.find(function(preset) {
                 return preset.id === presetId;
-            }) || presetsApi.getActivePreset("chat");
-            state.settings = presetsApi.applyChatPreset(state.settings, state.activeChatPreset);
+            }) || presetsApi.getActivePreset("provider");
+            state.settings = presetsApi.applyProviderPreset(state.settings, state.activeProviderPreset);
             applySettingsToForm();
+            state.endpointWasAutoFilled = config.isDefaultAddress(state.settings.provider, state.settings.endpoint);
             state.modelMetadataByName = {};
             renderModelOptions([]);
             clearFeedback();
@@ -211,7 +222,33 @@
             updateProviderControls();
             updateRequestPreview();
             updateProviderLabels();
+            updateResponseImageGenerationVisibility();
             renderAll();
+        });
+
+        elements.chatPresetSelect.addEventListener("change", function() {
+            var presetId = elements.chatPresetSelect.value;
+            presetsApi.setActivePreset("chat", presetId);
+            state.activeChatPreset = state.chatPresets.find(function(preset) {
+                return preset.id === presetId;
+            }) || presetsApi.getActivePreset("chat");
+            state.settings = presetsApi.applyChatPreset(state.settings, state.activeChatPreset);
+            applySettingsToForm();
+            clearFeedback();
+            state.status = null;
+            saveSettings();
+            updateProviderControls();
+            updateRequestPreview();
+            updateProviderLabels();
+            updateResponseImageGenerationVisibility();
+            renderAll();
+        });
+
+        elements.saveChatPresetButton.addEventListener("click", function() {
+            syncSettingsFromForm();
+            saveActiveChatPresetFromCurrent();
+            renderChatPresetSelect();
+            setFeedback("已保存当前聊天预设。", "ok");
         });
 
         elements.providerSelect.addEventListener("change", function() {
@@ -230,9 +267,7 @@
             }
             elements.endpointInput.value = state.settings.endpoint;
             elements.endpointInput.placeholder = config.addressPlaceholderFor(next);
-            state.settings.model = "";
-            elements.modelInput.value = "";
-            saveActiveChatPresetFromCurrent();
+            saveActiveProviderPresetFromCurrent();
             state.modelMetadataByName = {};
             renderModelOptions([]);
             clearFeedback();
@@ -246,7 +281,7 @@
 
         elements.openaiApiSelect.addEventListener("change", function() {
             state.settings.openaiApi = elements.openaiApiSelect.value;
-            saveActiveChatPresetFromCurrent();
+            saveActiveProviderPresetFromCurrent();
             clearFeedback();
             state.status = null;
             saveSettings();
@@ -301,11 +336,12 @@
 
         elements.endpointInput.addEventListener("blur", normalizeEndpointInput);
         elements.streamCheckbox.addEventListener("change", syncSettingsFromForm);
-        elements.responseImageGenerationCheckbox.addEventListener("change", syncSettingsFromForm);
+        elements.responseImageGenerationCheckbox.addEventListener("change", function() {
+            setActiveChatResponseImageGeneration(elements.responseImageGenerationCheckbox.checked);
+        });
 
         elements.apiKeyInput.addEventListener("input", function() {
-            var apiKey = elements.apiKeyInput.value.trim();
-            saveActiveChatPresetFromCurrent();
+            saveActiveProviderPresetFromCurrent();
         });
 
         elements.attachButton.addEventListener("click", function() {
@@ -397,14 +433,14 @@
         state.settings.frequencyPenalty = parseOptionalNumber(elements.frequencyPenaltyInput.value, -2, 2);
         state.settings.reasoning = elements.reasoningSelect.value;
         state.settings.stream = elements.streamCheckbox.checked;
-        state.settings.responseImageGeneration = Boolean(elements.responseImageGenerationCheckbox.checked);
-        if (shouldSaveActiveChatPreset()) {
-            saveActiveChatPresetFromCurrent();
+        if (shouldSaveActiveProviderPreset()) {
+            saveActiveProviderPresetFromCurrent();
         }
         clearFeedback();
         state.status = null;
         saveSettings();
         updateParameterVisibility();
+        updateResponseImageGenerationVisibility();
         updateRequestPreview();
         updateProviderLabels();
         updateModelCapabilityPanel();
@@ -415,7 +451,7 @@
         if (normalized && normalized !== elements.endpointInput.value.trim()) {
             elements.endpointInput.value = normalized;
             state.settings.endpoint = normalized;
-            saveActiveChatPresetFromCurrent();
+            saveActiveProviderPresetFromCurrent();
             saveSettings();
         }
         updateRequestPreview();
@@ -438,8 +474,9 @@
         elements.frequencyPenaltyInput.value = optionalNumberValue(state.settings.frequencyPenalty);
         elements.reasoningSelect.value = state.settings.reasoning || defaultSettings.reasoning;
         elements.streamCheckbox.checked = Boolean(state.settings.stream);
-        elements.responseImageGenerationCheckbox.checked = Boolean(state.settings.responseImageGeneration);
+        elements.responseImageGenerationCheckbox.checked = Boolean(currentChatResponseImageGeneration());
         elements.apiKeyInput.value = loadApiKey();
+        updateResponseImageGenerationVisibility();
     }
 
     function loadSettings() {
@@ -459,6 +496,7 @@
             if (!settings.reasoning) {
                 settings.reasoning = defaultSettings.reasoning;
             }
+            delete settings.responseImageGeneration;
             normalizeParameterSettings(settings);
             return settings;
         } catch (error) {
@@ -470,6 +508,7 @@
 
     function saveSettings() {
         var safeSettings = Object.assign({}, state.settings);
+        delete safeSettings.responseImageGeneration;
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(safeSettings));
     }
 
@@ -497,11 +536,10 @@
         settings.repeatPenalty = normalizeOptionalNumber(settings.repeatPenalty, 0, 4);
         settings.presencePenalty = normalizeOptionalNumber(settings.presencePenalty, -2, 2);
         settings.frequencyPenalty = normalizeOptionalNumber(settings.frequencyPenalty, -2, 2);
-        settings.responseImageGeneration = Boolean(settings.responseImageGeneration);
     }
 
     function loadApiKey() {
-        return presetsApi.apiKeyForPreset(state.activeChatPreset);
+        return presetsApi.apiKeyForProviderPreset(state.activeProviderPreset);
     }
 
     function loadChats() {
@@ -538,6 +576,10 @@
             if (chat.lmStudioRestState) {
                 chat.lmStudioRestState.responseId = chat.lmStudioRestState.responseId || "";
                 chat.lmStudioRestState.signature = chat.lmStudioRestState.signature || "";
+            }
+            if (typeof chat.responseImageGeneration !== "boolean") {
+                chat.responseImageGeneration = Boolean(chat.responseImageGeneration);
+                changed = true;
             }
             chat.messages.forEach(function(message) {
                 if (!message.id) {
@@ -636,6 +678,7 @@
             id: "chat-" + Date.now() + "-" + Math.random().toString(16).slice(2),
             title: "新会话",
             messages: [],
+            responseImageGeneration: false,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
         };
@@ -660,6 +703,25 @@
         return chat;
     }
 
+    function currentChatResponseImageGeneration() {
+        return Boolean(getActiveChat().responseImageGeneration);
+    }
+
+    function syncActiveChatResponseImageGeneration() {
+        if (elements.responseImageGenerationCheckbox) {
+            elements.responseImageGenerationCheckbox.checked = currentChatResponseImageGeneration();
+        }
+    }
+
+    function setActiveChatResponseImageGeneration(enabled) {
+        var chat = getActiveChat();
+        chat.responseImageGeneration = Boolean(enabled) && supportsResponsesImageGeneration();
+        elements.responseImageGenerationCheckbox.checked = chat.responseImageGeneration;
+        saveChats();
+        updateResponseImageGenerationVisibility();
+        updateRequestPreview();
+    }
+
     function findMessage(chat, messageId) {
         return chat.messages.find(function(message) {
             return message.id === messageId;
@@ -667,6 +729,8 @@
     }
 
     function renderAll() {
+        syncActiveChatResponseImageGeneration();
+        renderProviderPresetSelect();
         renderChatPresetSelect();
         renderChatList();
         renderMessages();
@@ -677,6 +741,29 @@
         updateSendState();
     }
 
+    function renderProviderPresetSelect() {
+        state.providerPresets = presetsApi.presetsByKind("provider");
+        state.activeProviderPreset = presetsApi.getActivePreset("provider");
+        elements.providerPresetSelect.textContent = "";
+        if (!state.providerPresets.length) {
+            var empty = document.createElement("option");
+            empty.value = "";
+            empty.textContent = "未配置接入配置";
+            elements.providerPresetSelect.appendChild(empty);
+            elements.providerPresetSelect.value = "";
+            return;
+        }
+        state.providerPresets.forEach(function(preset) {
+            var option = document.createElement("option");
+            option.value = preset.id;
+            option.textContent = preset.name;
+            elements.providerPresetSelect.appendChild(option);
+        });
+        if (state.activeProviderPreset) {
+            elements.providerPresetSelect.value = state.activeProviderPreset.id;
+        }
+    }
+
     function renderChatPresetSelect() {
         state.chatPresets = presetsApi.presetsByKind("chat");
         state.activeChatPreset = presetsApi.getActivePreset("chat");
@@ -684,7 +771,7 @@
         if (!state.chatPresets.length) {
             var empty = document.createElement("option");
             empty.value = "";
-            empty.textContent = "未配置预设";
+            empty.textContent = "未配置聊天预设";
             elements.chatPresetSelect.appendChild(empty);
             elements.chatPresetSelect.value = "";
             return;
@@ -700,17 +787,52 @@
         }
     }
 
+    function saveActiveProviderPresetFromCurrent() {
+        if (!state.activeProviderPreset) {
+            return;
+        }
+        var provider = config.getProvider(state.settings.provider);
+        var openaiApi = provider.mode === "openai" && provider.supportsResponses === false ?
+            "chat" :
+            state.settings.openaiApi;
+        var next = Object.assign({}, state.activeProviderPreset, {
+            provider: state.settings.provider,
+            endpoint: state.settings.endpoint,
+            apiKey: elements.apiKeyInput.value.trim(),
+            openaiApi: openaiApi
+        });
+        presetsApi.upsertPreset(next);
+        state.activeProviderPreset = next;
+        state.providerPresets = presetsApi.presetsByKind("provider");
+        state.endpointWasAutoFilled = config.isDefaultAddress(state.settings.provider, state.settings.endpoint);
+    }
+
+    function shouldSaveActiveProviderPreset() {
+        if (!state.activeProviderPreset) {
+            return false;
+        }
+        return state.activeProviderPreset.provider !== state.settings.provider ||
+            state.activeProviderPreset.endpoint !== state.settings.endpoint ||
+            state.activeProviderPreset.openaiApi !== state.settings.openaiApi ||
+            state.activeProviderPreset.apiKey !== elements.apiKeyInput.value.trim();
+    }
+
     function saveActiveChatPresetFromCurrent() {
         if (!state.activeChatPreset) {
             return;
         }
         var next = Object.assign({}, state.activeChatPreset, {
-            provider: state.settings.provider,
-            endpoint: state.settings.endpoint,
-            apiKey: elements.apiKeyInput.value.trim(),
-            model: state.settings.model,
-            openaiApi: state.settings.openaiApi,
-            responseImageGeneration: Boolean(state.settings.responseImageGeneration)
+            systemPrompt: state.settings.systemPrompt,
+            temperature: state.settings.temperature,
+            maxTokens: state.settings.maxTokens,
+            topP: state.settings.topP,
+            topK: state.settings.topK,
+            minP: state.settings.minP,
+            repeatPenalty: state.settings.repeatPenalty,
+            presencePenalty: state.settings.presencePenalty,
+            frequencyPenalty: state.settings.frequencyPenalty,
+            reasoning: state.settings.reasoning,
+            stream: Boolean(state.settings.stream)
         });
         presetsApi.upsertPreset(next);
         state.activeChatPreset = next;
@@ -721,12 +843,17 @@
         if (!state.activeChatPreset) {
             return false;
         }
-        return state.activeChatPreset.provider !== state.settings.provider ||
-            state.activeChatPreset.endpoint !== state.settings.endpoint ||
-            state.activeChatPreset.model !== state.settings.model ||
-            state.activeChatPreset.openaiApi !== state.settings.openaiApi ||
-            Boolean(state.activeChatPreset.responseImageGeneration) !== Boolean(state.settings.responseImageGeneration) ||
-            state.activeChatPreset.apiKey !== elements.apiKeyInput.value.trim();
+        return state.activeChatPreset.systemPrompt !== state.settings.systemPrompt ||
+            state.activeChatPreset.temperature !== state.settings.temperature ||
+            state.activeChatPreset.maxTokens !== state.settings.maxTokens ||
+            state.activeChatPreset.topP !== state.settings.topP ||
+            state.activeChatPreset.topK !== state.settings.topK ||
+            state.activeChatPreset.minP !== state.settings.minP ||
+            state.activeChatPreset.repeatPenalty !== state.settings.repeatPenalty ||
+            state.activeChatPreset.presencePenalty !== state.settings.presencePenalty ||
+            state.activeChatPreset.frequencyPenalty !== state.settings.frequencyPenalty ||
+            state.activeChatPreset.reasoning !== state.settings.reasoning ||
+            Boolean(state.activeChatPreset.stream) !== Boolean(state.settings.stream);
     }
 
     function renderChatList() {
@@ -1373,20 +1500,27 @@
 
     function updateProviderLabels() {
         var provider = config.getProvider(state.settings.provider);
+        var providerLabel = activeProviderLabel(provider);
         var model = state.settings.model || "未选择模型";
-        elements.providerLabel.textContent = provider.label;
+        elements.providerLabel.textContent = providerLabel;
         if (state.status) {
             applyStatus(state.status.text, state.status.tone);
             return;
         }
         var chat = getActiveChat();
         if (isLmStudioRestDowngraded(chat)) {
-            elements.statusText.textContent = provider.label + " · 已降级为 Responses · " + model;
+            elements.statusText.textContent = providerLabel + " · 已降级为 Responses · " + model;
             ui.setStatusPill(elements.connectionPill, state.isSending ? "生成中" : "已降级为 Responses", "warn");
             return;
         }
-        elements.statusText.textContent = provider.label + " · " + model;
-        ui.setStatusPill(elements.connectionPill, state.isSending ? "生成中" : provider.label);
+        elements.statusText.textContent = providerLabel + " · " + model;
+        ui.setStatusPill(elements.connectionPill, state.isSending ? "生成中" : providerLabel);
+    }
+
+    function activeProviderLabel(provider) {
+        return state.activeProviderPreset && state.activeProviderPreset.name ?
+            state.activeProviderPreset.name :
+            provider.label;
     }
 
     function updateProviderControls() {
@@ -1397,11 +1531,11 @@
         elements.openaiApiSelect.disabled = !isOpenAi || state.isSending;
         if (provider.mode === "openai" && provider.supportsResponses === false) {
             state.settings.openaiApi = "chat";
-            state.settings.responseImageGeneration = false;
         }
         elements.openaiApiSelect.value = state.settings.openaiApi;
         elements.endpointInput.placeholder = config.addressPlaceholderFor(state.settings.provider);
         updateParameterVisibility();
+        updateResponseImageGenerationVisibility();
     }
 
     function updateParameterVisibility() {
@@ -1413,21 +1547,27 @@
         setFieldVisible(elements.repeatPenaltyField, capabilities.repeatPenalty);
         setFieldVisible(elements.presencePenaltyField, capabilities.presencePenalty);
         setFieldVisible(elements.frequencyPenaltyField, capabilities.frequencyPenalty);
-        setFieldVisible(elements.responseImageGenerationField, supportsResponsesImageGeneration());
         elements.topPInput.disabled = state.isSending || !capabilities.topP;
         elements.topKInput.disabled = state.isSending || !capabilities.topK;
         elements.minPInput.disabled = state.isSending || !capabilities.minP;
         elements.repeatPenaltyInput.disabled = state.isSending || !capabilities.repeatPenalty;
         elements.presencePenaltyInput.disabled = state.isSending || !capabilities.presencePenalty;
         elements.frequencyPenaltyInput.disabled = state.isSending || !capabilities.frequencyPenalty;
-        elements.responseImageGenerationCheckbox.disabled = state.isSending || !supportsResponsesImageGeneration();
     }
 
     function supportsResponsesImageGeneration() {
         var provider = config.getProvider(state.settings.provider);
         return provider.mode === "openai" &&
             provider.supportsResponses !== false &&
-            state.settings.openaiApi === "responses";
+            state.settings.openaiApi === "responses" &&
+            Boolean(state.activeProviderPreset && state.activeProviderPreset.responseImageGeneration);
+    }
+
+    function updateResponseImageGenerationVisibility() {
+        var visible = supportsResponsesImageGeneration();
+        setFieldVisible(elements.responseImageGenerationField, visible);
+        elements.responseImageGenerationCheckbox.disabled = state.isSending || !visible;
+        elements.responseImageGenerationCheckbox.checked = visible && currentChatResponseImageGeneration();
     }
 
     function updateModelCapabilityPanel() {
@@ -1762,6 +1902,8 @@
         elements.sendButton.disabled = state.isSending;
         elements.stopButton.disabled = !state.isSending;
         elements.promptInput.disabled = state.isSending;
+        elements.providerPresetSelect.disabled = state.isSending;
+        elements.chatPresetSelect.disabled = state.isSending;
         elements.providerSelect.disabled = state.isSending;
         elements.openaiApiSelect.disabled = state.isSending || state.settings.provider !== "openai";
         elements.endpointInput.disabled = state.isSending;
@@ -1772,15 +1914,16 @@
         elements.maxTokensInput.disabled = state.isSending;
         elements.reasoningSelect.disabled = state.isSending;
         elements.streamCheckbox.disabled = state.isSending;
-        elements.responseImageGenerationCheckbox.disabled = state.isSending || !supportsResponsesImageGeneration();
         elements.apiKeyInput.disabled = state.isSending;
         elements.attachButton.disabled = state.isSending;
         elements.loadModelsButton.disabled = state.isSending || state.isLoadingModels;
+        elements.saveChatPresetButton.disabled = state.isSending || !state.activeChatPreset;
         elements.testModelCapabilitiesButton.disabled = state.isSending ||
             state.isLoadingModels ||
             state.isTestingCapabilities ||
             !state.settings.model;
         updateParameterVisibility();
+        updateResponseImageGenerationVisibility();
         if (state.isSending) {
             toggleModelMenu(false);
         }
@@ -1994,10 +2137,12 @@
     }
 
     function responseImageGenerationEnabled(options) {
+        var chat = options && options.chat ? options.chat : getActiveChat();
+        var requested = Boolean(chat && chat.responseImageGeneration);
         if (options && options.responseImageGeneration !== undefined) {
-            return Boolean(options.responseImageGeneration);
+            requested = Boolean(options.responseImageGeneration);
         }
-        return Boolean(state.settings.responseImageGeneration) && supportsResponsesImageGeneration();
+        return requested && supportsResponsesImageGeneration();
     }
 
     function markChatHistoryDirty(chat) {
@@ -2125,7 +2270,6 @@
         state.settings.reasoning = "auto";
         elements.reasoningSelect.value = "auto";
         saveSettings();
-        saveActiveChatPresetFromCurrent();
         setFeedback("当前模型不支持所选思考模式，已切换为自动并重试。", "warn");
         return true;
     }
@@ -2333,13 +2477,13 @@
         assistantMessage.images.push(image);
     }
 
-    function responsesSignatureFor(responseUrl, responseTransport) {
+    function responsesSignatureFor(responseUrl, responseTransport, options) {
         return [
             responseTransport,
             responseUrl,
             state.settings.model || "",
             state.settings.systemPrompt.trim(),
-            responseImageGenerationEnabled() ? "image_generation:on" : "image_generation:off"
+            responseImageGenerationEnabled(options) ? "image_generation:on" : "image_generation:off"
         ].join("\n");
     }
 
@@ -2440,7 +2584,7 @@
         var responseUrl = options.responsesUrl || config.requestUrlFor(state.settings, "chat");
         var responseTransport = options.responseTransport || "openaiResponses";
         var responseState = options.chat ? ensureResponsesState(options.chat) : null;
-        var responseSignature = responsesSignatureFor(responseUrl, responseTransport);
+        var responseSignature = responsesSignatureFor(responseUrl, responseTransport, options);
         var usePreviousResponse = shouldUsePreviousOpenAiResponse(responseState, responseSignature, options);
         var useImageGeneration = responseImageGenerationEnabled(options);
         await sendOpenAiResponsesRequest({
@@ -2709,7 +2853,7 @@
         var body = chatAdapters.buildAnthropicBody({
             model: state.settings.model,
             messages: messages,
-            maxTokens: state.settings.maxTokens > 0 ? state.settings.maxTokens : defaultSettings.maxTokens,
+            maxTokens: anthropicRequestedMaxTokens(),
             temperature: state.settings.temperature,
             stream: state.settings.stream,
             topP: state.settings.topP,
@@ -2717,13 +2861,8 @@
             system: requestSystemPrompt(options)
         });
 
-        var response = await fetch(config.requestUrlFor(state.settings, "chat"), {
-            method: "POST",
-            headers: requestHeaders({ auth: "x-api-key", json: true, anthropicVersion: true }),
-            body: JSON.stringify(body),
-            signal: state.abortController.signal
-        });
-        await ensureOk(response);
+        var response = await fetchAnthropic(body);
+        response = await retryAnthropicWithRequiredMaxTokens(response, body);
 
         if (state.settings.stream && response.body && chatAdapters.isEventStream(response)) {
             await chatAdapters.readSse(response, function(json) {
@@ -2767,6 +2906,42 @@
         applyAssistantContent(assistantMessage, chatAdapters.extractAnthropicText(data), options);
     }
 
+    async function fetchAnthropic(body) {
+        return fetch(config.requestUrlFor(state.settings, "chat"), {
+            method: "POST",
+            headers: requestHeaders({ auth: "x-api-key", json: true, anthropicVersion: true }),
+            body: JSON.stringify(body),
+            signal: state.abortController.signal
+        });
+    }
+
+    async function retryAnthropicWithRequiredMaxTokens(response, body) {
+        if (response.ok) {
+            return response;
+        }
+        var text = await response.text();
+        var fallback = anthropicMaxTokensFallback(text, body.max_tokens);
+        if (!fallback) {
+            throw httpError(response.status, text);
+        }
+        body.max_tokens = fallback;
+        var retry = await fetchAnthropic(body);
+        if (retry.ok) {
+            return retry;
+        }
+        var retryText = await retry.text();
+        var constrainedFallback = anthropicMaxTokensFallback(retryText, body.max_tokens);
+        if (constrainedFallback && constrainedFallback !== body.max_tokens) {
+            body.max_tokens = constrainedFallback;
+            var constrainedRetry = await fetchAnthropic(body);
+            if (constrainedRetry.ok) {
+                return constrainedRetry;
+            }
+            throw httpError(constrainedRetry.status, await constrainedRetry.text());
+        }
+        throw httpError(retry.status, retryText);
+    }
+
     function hasMessageContent(message) {
         return Boolean(
             message &&
@@ -2777,8 +2952,68 @@
         );
     }
 
+    function anthropicRequestedMaxTokens() {
+        return state.settings.maxTokens > 0 ? state.settings.maxTokens : undefined;
+    }
+
     function anthropicMaxTokens() {
-        return state.settings.maxTokens > 0 ? state.settings.maxTokens : defaultSettings.maxTokens;
+        if (state.settings.maxTokens > 0) {
+            return state.settings.maxTokens;
+        }
+        return modelTokenLimit(currentModelMetadata()) || ANTHROPIC_COMPAT_AUTO_MAX_TOKENS;
+    }
+
+    function anthropicMaxTokensFallback(text, current) {
+        var constrained = anthropicMaxTokensFromError(text);
+        if (constrained && constrained !== current) {
+            return constrained;
+        }
+        if (!current && anthropicRequiresMaxTokens(text)) {
+            return anthropicMaxTokens();
+        }
+        return 0;
+    }
+
+    function anthropicRequiresMaxTokens(text) {
+        return /max_tokens/i.test(text || "") &&
+            /(required|greater than 0|expected number|must be greater|必须|大于)/i.test(text || "");
+    }
+
+    function anthropicMaxTokensFromError(text) {
+        var match = String(text || "").match(/(?:less than or equal to|at most|no more than|<=|不超过|小于或等于)\s*([0-9]+)/i);
+        return match ? positiveInteger(match[1]) : 0;
+    }
+
+    function modelTokenLimit(model) {
+        if (!model) {
+            return 0;
+        }
+        return positiveInteger(
+            model.max_output_tokens ||
+            model.maxOutputTokens ||
+            model.output_token_limit ||
+            model.outputTokenLimit ||
+            model.max_tokens ||
+            model.maxTokens ||
+            model.max_context_length ||
+            model.maxContextLength ||
+            model.context_length ||
+            model.contextLength ||
+            model.n_ctx ||
+            model.ctx_length
+        ) || modelTokenLimit(model.parent_model);
+    }
+
+    function positiveInteger(value) {
+        var number = Number(value);
+        if (!Number.isFinite(number) || number <= 0) {
+            return 0;
+        }
+        return Math.floor(number);
+    }
+
+    function httpError(status, text) {
+        return new Error("HTTP " + status + " " + String(text || "").slice(0, 260));
     }
 
     function requestHeaders(options) {
@@ -2868,22 +3103,22 @@
         if (provider.mode === "none" || !state.settings.provider) {
             return {
                 valid: false,
-                status: "未配置 Provider",
-                message: "当前还未配置 Provider 信息。请先在设置页创建并选择一个预设。"
+                status: "未配置接入配置",
+                message: "当前还未配置接入配置。请先在设置页创建并选择一个接入配置。"
             };
         }
         if (!state.settings.endpoint) {
             return {
                 valid: false,
                 status: "请先填写地址",
-                message: "当前预设还没有填写服务地址。请到设置页补全地址。"
+                message: "当前接入配置还没有填写服务地址。请到设置页补全地址。"
             };
         }
         if (options.requireModel && !state.settings.model) {
             return {
                 valid: false,
                 status: "请先填写模型名",
-                message: "当前预设还没有选择模型。请先测试连接/刷新模型，或手动填写模型名。",
+                message: "当前还没有选择模型。请先测试连接/刷新模型，或手动填写模型名。",
                 tone: "warn"
             };
         }
@@ -3061,6 +3296,7 @@
             title: chat.title || "导入会话",
             messages: Array.isArray(chat.messages) ? chat.messages.map(normalizeImportedMessage).filter(Boolean) : [],
             pinned: Boolean(chat.pinned),
+            responseImageGeneration: Boolean(chat.responseImageGeneration),
             responsesState: null,
             lmStudioRestState: null,
             createdAt: chat.createdAt || now,

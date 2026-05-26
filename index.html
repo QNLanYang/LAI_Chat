@@ -61,8 +61,8 @@
             <section class="side-section settings">
                 <h2>连接</h2>
                 <label>
-                    <span>预设</span>
-                    <select id="chatPresetSelect"></select>
+                    <span>接入配置</span>
+                    <select id="providerPresetSelect"></select>
                 </label>
                 <label hidden>
                     <span>服务</span>
@@ -96,7 +96,7 @@
                 </label>
                 <div class="row-actions">
                     <button class="ghost-button" type="button" id="loadModelsButton">测试连接/刷新模型</button>
-                    <a class="ghost-button link-button" href="settings.html">管理预设</a>
+                    <a class="ghost-button link-button" href="settings.html">管理配置</a>
                 </div>
                 <div class="model-capability-panel" id="modelCapabilityPanel" hidden>
                     <div class="model-capability-head">
@@ -108,13 +108,20 @@
                 </div>
                 <div class="connection-feedback" id="connectionFeedback" aria-live="polite"></div>
                 <label hidden>
-                    <span>API Key（保存在当前预设）</span>
+                    <span>API Key（保存在接入配置）</span>
                     <input id="apiKeyInput" type="password" spellcheck="false" autocomplete="new-password" placeholder="本地服务通常留空">
                 </label>
             </section>
 
-            <section class="side-section settings">
-                <h2>参数</h2>
+            <details class="side-section settings parameters-section">
+                <summary>参数</summary>
+                <label>
+                    <span>聊天预设</span>
+                    <select id="chatPresetSelect"></select>
+                </label>
+                <div class="row-actions">
+                    <button class="ghost-button" type="button" id="saveChatPresetButton">保存当前预设</button>
+                </div>
                 <label>
                     <span>系统提示</span>
                     <textarea id="systemPromptInput" rows="4" placeholder="可选"></textarea>
@@ -126,7 +133,7 @@
                     </label>
                     <label>
                         <span>Max tokens</span>
-                        <input id="maxTokensInput" type="number" min="0" step="1" placeholder="0 = 自动">
+                        <input id="maxTokensInput" type="number" min="0" step="1" placeholder="0 = 不限制">
                     </label>
                     <label id="topPField">
                         <span>Top P</span>
@@ -172,12 +179,12 @@
                     <input id="streamCheckbox" type="checkbox">
                     <span>流式输出</span>
                 </label>
-                <label class="check-row" id="responseImageGenerationField" hidden>
-                    <input id="responseImageGenerationCheckbox" type="checkbox">
-                    <span>允许 Responses 调用图片生成</span>
-                </label>
                 <div class="context-meter" id="contextMeter" aria-live="polite"></div>
-            </section>
+            </details>
+            <label class="check-row" id="responseImageGenerationField" hidden>
+                <input id="responseImageGenerationCheckbox" type="checkbox">
+                <span>本对话允许 Responses 生图</span>
+            </label>
 
             <footer class="sidebar-footer">
                 <button class="ghost-button" type="button" id="importButton">导入</button>

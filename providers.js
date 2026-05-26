@@ -144,20 +144,38 @@
         repeatPenalty: null,
         presencePenalty: null,
         frequencyPenalty: null,
-        responseImageGeneration: false,
         stream: true
     };
 
-    var DEFAULT_CHAT_PRESETS = [
+    var DEFAULT_PROVIDER_PRESETS = [
         {
-            id: "chat-unconfigured",
-            name: "未配置聊天预设",
-            kind: "chat",
+            id: "provider-unconfigured",
+            name: "未配置接入配置",
+            kind: "provider",
             provider: "",
             endpoint: "",
             apiKey: "",
-            model: "",
-            openaiApi: "chat"
+            openaiApi: "chat",
+            responseImageGeneration: false
+        }
+    ];
+
+    var DEFAULT_CHAT_PRESETS = [
+        {
+            id: "chat-default",
+            name: "默认聊天预设",
+            kind: "chat",
+            systemPrompt: "",
+            temperature: 0.7,
+            maxTokens: 0,
+            topP: null,
+            topK: null,
+            minP: null,
+            repeatPenalty: null,
+            presencePenalty: null,
+            frequencyPenalty: null,
+            reasoning: "auto",
+            stream: true
         }
     ];
 
@@ -391,7 +409,7 @@
     function addressPlaceholderFor(providerKey) {
         var provider = getProvider(providerKey);
         if (provider.mode === "none") {
-            return "请先选择 Provider";
+            return "请先选择接入类型";
         }
         if (provider.defaultAddress) {
             return provider.defaultAddress;
@@ -402,7 +420,7 @@
     function imageAddressPlaceholderFor(providerKey) {
         var provider = getImageProvider(providerKey);
         if (provider.mode === "none") {
-            return "请先选择 Provider";
+            return "请先选择接入类型";
         }
         return provider.defaultAddress || "api.example.com";
     }
@@ -414,6 +432,7 @@
         EMPTY_CHAT_PROVIDER: EMPTY_CHAT_PROVIDER,
         EMPTY_IMAGE_PROVIDER: EMPTY_IMAGE_PROVIDER,
         DEFAULT_SETTINGS: DEFAULT_SETTINGS,
+        DEFAULT_PROVIDER_PRESETS: DEFAULT_PROVIDER_PRESETS,
         DEFAULT_CHAT_PRESETS: DEFAULT_CHAT_PRESETS,
         DEFAULT_IMAGE_PRESETS: DEFAULT_IMAGE_PRESETS,
         getProvider: getProvider,

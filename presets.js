@@ -12,7 +12,7 @@
     function loadPresets() {
         var stored = readJson(KEYS.presets, null);
         if (Array.isArray(stored)) {
-            var normalized = stored.map(normalizePreset).filter(Boolean);
+            var normalized = normalizePresetList(stored);
             if (JSON.stringify(stored) !== JSON.stringify(normalized)) {
                 savePresets(normalized);
             }
@@ -25,6 +25,68 @@
 
     function savePresets(presets) {
         localStorage.setItem(KEYS.presets, JSON.stringify(presets.map(normalizePreset).filter(Boolean)));
+    }
+
+    function normalizePresetList(presets) {
+        return ensureDefaultKinds(expandLegacyChatPresets(presets).map(normalizePreset).filter(Boolean));
+    }
+
+    function expandLegacyChatPresets(presets) {
+        var expanded = [];
+        presets.forEach(function(preset) {
+            if (isLegacyChatProviderPreset(preset)) {
+                expanded.push(Object.assign({}, preset, {
+                    id: "provider-" + (preset.id || Date.now()),
+                    kind: "provider",
+                    name: preset.name || "接入配置"
+                }));
+                if (!hasChatPresetFields(preset)) {
+                    return;
+                }
+            }
+            expanded.push(preset);
+        });
+        return expanded;
+    }
+
+    function isLegacyChatProviderPreset(preset) {
+        return preset &&
+            preset.kind === "chat" &&
+            (
+                preset.provider ||
+                preset.endpoint ||
+                preset.apiKey ||
+                preset.openaiApi ||
+                preset.responseImageGeneration
+            );
+    }
+
+    function hasChatPresetFields(preset) {
+        return preset &&
+            (
+                preset.systemPrompt ||
+                preset.temperature !== undefined ||
+                preset.maxTokens !== undefined ||
+                preset.topP !== undefined ||
+                preset.topK !== undefined ||
+                preset.minP !== undefined ||
+                preset.repeatPenalty !== undefined ||
+                preset.presencePenalty !== undefined ||
+                preset.frequencyPenalty !== undefined ||
+                preset.reasoning ||
+                preset.stream !== undefined
+            );
+    }
+
+    function ensureDefaultKinds(presets) {
+        ["provider", "chat", "image"].forEach(function(kind) {
+            if (!presets.some(function(preset) {
+                return preset.kind === kind;
+            })) {
+                presets.push(normalizePreset(defaultPresetForKind(kind)));
+            }
+        });
+        return presets.filter(Boolean);
     }
 
     function presetsByKind(kind) {
@@ -107,33 +169,82 @@
             return Object.assign({}, settings);
         }
         return Object.assign({}, settings, {
-            provider: preset.provider,
-            endpoint: preset.endpoint,
-            model: preset.model || "",
-            openaiApi: preset.openaiApi || "chat",
-            responseImageGeneration: Boolean(preset.responseImageGeneration)
+            systemPrompt: preset.systemPrompt || "",
+            temperature: normalizeNumber(preset.temperature, 0, 2, config.DEFAULT_SETTINGS.temperature),
+            maxTokens: normalizeTokenLimit(preset.maxTokens),
+            topP: normalizeOptionalNumber(preset.topP, 0, 1),
+            topK: normalizeOptionalInteger(preset.topK, 0),
+            minP: normalizeOptionalNumber(preset.minP, 0, 1),
+            repeatPenalty: normalizeOptionalNumber(preset.repeatPenalty, 0, 4),
+            presencePenalty: normalizeOptionalNumber(preset.presencePenalty, -2, 2),
+            frequencyPenalty: normalizeOptionalNumber(preset.frequencyPenalty, -2, 2),
+            reasoning: preset.reasoning || "auto",
+            stream: preset.stream !== false
         });
     }
 
-    function apiKeyForPreset(preset) {
+    function applyProviderPreset(settings, preset) {
+        if (!preset) {
+            return Object.assign({}, settings);
+        }
+        var provider = config.getProvider(preset.provider);
+        var openaiApi = normalizeOpenAiApi(provider, preset.openaiApi);
+        return Object.assign({}, settings, {
+            provider: preset.provider || "",
+            endpoint: preset.endpoint || "",
+            openaiApi: openaiApi
+        });
+    }
+
+    function apiKeyForProviderPreset(preset) {
         return preset && preset.apiKey ? preset.apiKey : "";
     }
 
+    function apiKeyForPreset(preset) {
+        return apiKeyForProviderPreset(preset);
+    }
+
     function newPreset(kind) {
-        var base = kind === "image" ? config.DEFAULT_IMAGE_PRESETS[0] : config.DEFAULT_CHAT_PRESETS[0];
+        var base = defaultPresetForKind(kind);
         return normalizePreset(Object.assign({}, base, {
             id: kind + "-" + Date.now() + "-" + Math.random().toString(16).slice(2),
-            name: kind === "image" ? "新图片预设" : "新聊天预设",
+            name: defaultPresetName(kind),
             apiKey: ""
         }));
     }
 
     function activeKey(kind) {
-        return kind === "image" ? KEYS.activeImagePreset : KEYS.activeChatPreset;
+        if (kind === "image") {
+            return KEYS.activeImagePreset;
+        }
+        if (kind === "provider") {
+            return KEYS.activeProviderPreset;
+        }
+        return KEYS.activeChatPreset;
+    }
+
+    function defaultPresetForKind(kind) {
+        if (kind === "image") {
+            return config.DEFAULT_IMAGE_PRESETS[0];
+        }
+        if (kind === "provider") {
+            return config.DEFAULT_PROVIDER_PRESETS[0];
+        }
+        return config.DEFAULT_CHAT_PRESETS[0];
+    }
+
+    function defaultPresetName(kind) {
+        if (kind === "image") {
+            return "新图片预设";
+        }
+        if (kind === "provider") {
+            return "新接入配置";
+        }
+        return "新聊天预设";
     }
 
     function defaultPresets() {
-        return config.DEFAULT_CHAT_PRESETS.concat(config.DEFAULT_IMAGE_PRESETS).map(function(preset) {
+        return config.DEFAULT_PROVIDER_PRESETS.concat(config.DEFAULT_CHAT_PRESETS, config.DEFAULT_IMAGE_PRESETS).map(function(preset) {
             return Object.assign({}, preset);
         });
     }
@@ -143,24 +254,47 @@
             return null;
         }
         var isImage = preset.kind === "image";
+        var isProvider = preset.kind === "provider";
         var providerKey = preset.provider || "";
         var provider = isImage ? config.getImageProvider(providerKey) : config.getProvider(providerKey);
         var endpoint = preset.endpoint || "";
-        if (!isImage && provider.defaultScheme === "auto" && provider.defaultAddress && config.isDefaultAddress(providerKey, endpoint)) {
+        if (isProvider && provider.defaultScheme === "auto" && provider.defaultAddress && config.isDefaultAddress(providerKey, endpoint)) {
             endpoint = provider.defaultAddress;
         }
         var normalized = {
             id: preset.id || preset.kind + "-" + Date.now(),
-            name: preset.name || (isImage ? "新图片预设" : "新聊天预设"),
-            kind: isImage ? "image" : "chat",
-            provider: providerKey,
-            endpoint: endpoint,
-            apiKey: secrets.normalizeApiKey(preset.apiKey),
-            model: preset.model || "",
-            openaiApi: preset.openaiApi || "chat",
-            responseImageGeneration: Boolean(preset.responseImageGeneration)
+            name: preset.name || defaultPresetName(preset.kind),
+            kind: isImage ? "image" : isProvider ? "provider" : "chat"
         };
+        if (isProvider || isImage) {
+            normalized.provider = providerKey;
+            normalized.endpoint = endpoint;
+            normalized.apiKey = secrets.normalizeApiKey(preset.apiKey);
+        }
+        if (isProvider) {
+            normalized.openaiApi = normalizeOpenAiApi(provider, preset.openaiApi);
+            normalized.responseImageGeneration = Boolean(
+                provider.mode === "openai" &&
+                provider.supportsResponses !== false &&
+                normalized.openaiApi === "responses" &&
+                preset.responseImageGeneration
+            );
+        }
+        if (!isImage && !isProvider) {
+            normalized.systemPrompt = preset.systemPrompt || "";
+            normalized.temperature = normalizeNumber(preset.temperature, 0, 2, config.DEFAULT_SETTINGS.temperature);
+            normalized.maxTokens = normalizeTokenLimit(preset.maxTokens);
+            normalized.topP = normalizeOptionalNumber(preset.topP, 0, 1);
+            normalized.topK = normalizeOptionalInteger(preset.topK, 0);
+            normalized.minP = normalizeOptionalNumber(preset.minP, 0, 1);
+            normalized.repeatPenalty = normalizeOptionalNumber(preset.repeatPenalty, 0, 4);
+            normalized.presencePenalty = normalizeOptionalNumber(preset.presencePenalty, -2, 2);
+            normalized.frequencyPenalty = normalizeOptionalNumber(preset.frequencyPenalty, -2, 2);
+            normalized.reasoning = preset.reasoning || "auto";
+            normalized.stream = preset.stream !== false;
+        }
         if (isImage) {
+            normalized.model = preset.model || "";
             normalized.sizeMode = preset.sizeMode === "custom" ? "custom" : "native";
             normalized.nativeSize = isValidNativeSize(preset.nativeSize) ? preset.nativeSize : "auto";
             normalized.imageQuality = isValidImageQuality(preset.imageQuality) ? preset.imageQuality : "auto";
@@ -230,6 +364,52 @@
         return ["auto", "low"].indexOf(value) !== -1;
     }
 
+    function normalizeOpenAiApi(provider, value) {
+        return provider.mode === "openai" &&
+            provider.supportsResponses !== false &&
+            value === "responses" ?
+            "responses" :
+            "chat";
+    }
+
+    function normalizeNumber(value, min, max, fallback) {
+        var number = parseFloat(value);
+        if (!Number.isFinite(number)) {
+            return fallback;
+        }
+        return Math.min(max, Math.max(min, number));
+    }
+
+    function normalizeTokenLimit(value) {
+        var number = parseInt(value, 10);
+        if (!Number.isFinite(number) || number < 0) {
+            return 0;
+        }
+        return number;
+    }
+
+    function normalizeOptionalNumber(value, min, max) {
+        if (value === "" || value === null || value === undefined) {
+            return null;
+        }
+        var number = parseFloat(value);
+        if (!Number.isFinite(number)) {
+            return null;
+        }
+        return Math.min(max, Math.max(min, number));
+    }
+
+    function normalizeOptionalInteger(value, min) {
+        if (value === "" || value === null || value === undefined) {
+            return null;
+        }
+        var number = parseInt(value, 10);
+        if (!Number.isFinite(number)) {
+            return null;
+        }
+        return Math.max(min, number);
+    }
+
     function readJson(key, fallback) {
         try {
             var value = JSON.parse(localStorage.getItem(key) || "null");
@@ -249,6 +429,8 @@
         deletePreset: deletePreset,
         updateActivePreset: updateActivePreset,
         applyChatPreset: applyChatPreset,
+        applyProviderPreset: applyProviderPreset,
+        apiKeyForProviderPreset: apiKeyForProviderPreset,
         apiKeyForPreset: apiKeyForPreset,
         newPreset: newPreset
     };

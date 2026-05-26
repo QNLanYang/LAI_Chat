@@ -4,6 +4,28 @@
 
 版本号采用 SemVer。当前项目仍处于早期测试阶段，`0.x` 内不承诺稳定 API 或本地存储结构向前兼容。
 
+## [0.1.1-alpha.3] - 2026-05-26
+
+### Added
+
+- 聊天页新增独立的聊天预设选择和“保存当前预设”，聊天预设只保存系统提示词、采样参数、思考模式和流式设置。
+- 聊天页新增独立的接入配置选择，Provider 接入点只保存服务类型、Base URL、OpenAI API 类型、API Key 和显示名称。
+- Responses 聊天生图改为两级开关：Provider 接入点先允许使用 Responses 调用 GPT-image，具体会话再单独开启或关闭。
+- 新增 Provider 接入点激活状态存储，并为旧聊天预设自动拆分出 Provider 接入点和聊天预设。
+
+### Changed
+
+- 聊天页“参数”区域改为默认折叠，流式输出、思考模式、采样参数和聊天预设统一收在该区域内。
+- Max tokens 输入框文案改为 `0 = 不限制`；OpenAI Chat / Responses 等支持省略上限的请求在 `0` 时不发送 token 上限。
+- Provider 相关文案从“预设”调整为“接入点/接入配置”，降低与聊天预设混淆的概率。
+- Provider 接入点导出文件名改为 `lai-chat-providers.json`，导入导出提示同步强调其中可能包含 API Key。
+
+### Fixed
+
+- 修复 Anthropic-compatible Messages 端点在 Max tokens 为 `0` 时发送非法 `max_tokens: 0`，导致 LM Studio 兼容端点立即 400 的问题；现在会先按“不限制”语义省略字段，只有上游明确要求 `max_tokens` 时才补兼容值重试。
+- 修复 Responses 生图开关被保存到聊天预设/全局设置中，导致 Provider 能力边界和单会话开关混在一起的问题。
+- 修复切换聊天预设时清空模型列表、影响当前模型选择的问题。
+
 ## [0.1.1-alpha.2] - 2026-05-24
 
 ### Added
